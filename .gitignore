@@ -1,0 +1,10 @@
+# TODO: Review and extend this .gitignore for your project.
+# Consider what files should never be committed:
+#   - Environment files with secrets (.env)
+#   - Python bytecode and virtual environments
+#   - Model artifacts (stored in MLflow, not git)
+#   - Large data files (downloaded from Kaggle, not git)
+#   - Pulumi stack configuration with secrets
+#   - IDE and OS files
+#   - Docker build artifacts
+#   - Test coverage reports

@@ -1,0 +1,24 @@
+# ============================================================================
+# ModelServe — Docker Compose (Local Development)
+# ============================================================================
+# TODO: Define your complete local development stack.
+#
+# Required services:
+#   - PostgreSQL (MLflow backend store)
+#   - Redis (Feast online store)
+#   - MLflow Tracking Server (depends on Postgres)
+#   - FastAPI Inference Service (depends on MLflow, Redis)
+#   - Prometheus (scrapes FastAPI /metrics) — add in Sessions 3-4
+#   - Grafana (reads from Prometheus) — add in Sessions 3-4
+#
+# For each service, consider:
+#   - Which Docker image to use
+#   - What ports to expose
+#   - What environment variables to pass
+#   - What volumes to mount for persistence
+#   - What healthcheck to configure
+#   - What depends_on relationships exist
+#   - What network to attach to
+#
+# The entire stack must start with a single: docker compose up
+# ============================================================================

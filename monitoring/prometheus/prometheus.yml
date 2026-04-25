@@ -1,0 +1,19 @@
+# ============================================================================
+# ModelServe — Prometheus Configuration
+# ============================================================================
+# TODO: Configure Prometheus to scrape your services.
+#
+# You need to define:
+#   - global scrape_interval and evaluation_interval
+#   - rule_files pointing to your alerts.yml
+#   - scrape_configs with targets for:
+#     1. Prometheus itself (localhost:9090)
+#     2. Your FastAPI service (/metrics endpoint, 10s interval)
+#     3. Optionally: node_exporter for host-level metrics
+#
+# The service names in targets must match your docker-compose service names.
+# Example: if your FastAPI service is called "api" in Compose,
+#          the target is "api:8000"
+#
+# Refer to Prometheus docs: https://prometheus.io/docs/prometheus/latest/configuration/
+# ============================================================================

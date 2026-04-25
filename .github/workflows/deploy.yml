@@ -1,0 +1,39 @@
+# ============================================================================
+# ModelServe — GitHub Actions CI/CD Pipeline
+# ============================================================================
+# TODO: Implement the full CI/CD pipeline.
+#
+# Required jobs:
+#
+#   1. test
+#      - Triggers on: every push and pull request
+#      - Steps: checkout, setup Python, install dependencies, run pytest
+#      - Must pass before any other job runs
+#
+#   2. build-and-push
+#      - Triggers on: push to main only (after test passes)
+#      - Steps: checkout, configure AWS credentials, login to ECR,
+#               build Docker image, tag with :latest and :$GITHUB_SHA,
+#               push to ECR
+#      - Needs: test
+#
+#   3. deploy
+#      - Triggers on: push to main only (after build-and-push passes)
+#      - Steps: connect to deployment target, pull new images,
+#               restart services, verify health endpoint returns 200
+#      - Needs: build-and-push
+#
+# Optional additional jobs:
+#   - infrastructure: run pulumi up before build-and-push
+#   - lint: run flake8 or ruff
+#   - security-scan: run Trivy on built images (bonus marks)
+#
+# Required GitHub Secrets (document these in your README):
+#   - AWS_ACCESS_KEY_ID
+#   - AWS_SECRET_ACCESS_KEY
+#   - PULUMI_ACCESS_TOKEN
+#   - SSH_PRIVATE_KEY (if deploying to EC2 via SSH)
+#   - SSH_PUBLIC_KEY (if Pulumi creates key pairs)
+#
+# Refer to the Pulumi/CI/CD lab from Episodes 2-3 for patterns.
+# ============================================================================
