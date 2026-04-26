@@ -55,6 +55,16 @@ A production-style ML serving stack: FastAPI, MLflow, Feast, Redis, Postgres, Pr
 
 Compose publishes **`${GRAFANA_PORT:-3001}`** on the host. If the error still mentions **port 3000**, a **`.env`** file in the project root almost certainly has **`GRAFANA_PORT=3000`** (often copied from an old template). That value **overrides** the 3001 default. Edit `.env` to `GRAFANA_PORT=3001` or **remove** the line, then `docker compose down` and `docker compose up -d`. Confirm with `docker compose config | grep -A2 grafana` (published port should be **3001**).
 
+### MLflow: `PermissionError: [Errno 13] ... '/mlflow'` when running `training/train.py` on the host
+
+The tracking server was only using a **container** artifact path, so the Python client on the **VM host** tried to create **`/mlflow/...` locally** and failed. The compose file now starts MLflow with **`--serve-artifacts`** and **`--artifacts-destination /mlflow/artifacts`** so artifacts go through **HTTP** to the server.
+
+1. `git pull` the updated `docker-compose.yml`
+2. Restart MLflow: `docker compose up -d --build mlflow` (or full stack)
+3. Start a **new** training run (the failed run may be incomplete). You can use a new experiment: `export MLFLOW_EXPERIMENT_NAME=modelserve_fraud_v2` or remove old experiments in the UI / reset DB if you are still in dev.
+
+The **model signature** warning in logs is non-fatal; you can add `input_example` to `log_model` later in Phase 5+.
+
 ### MLflow + Postgres: `No module named 'psycopg2'`
 
 The stock `ghcr.io/mlflow/mlflow` image does not ship the PostgreSQL driver. This repo builds **`modelserve-mlflow:local`** from `docker/mlflow/Dockerfile`, which extends that image and installs `psycopg2-binary` (and `boto3` for S3 later). If you still see the error after pulling changes:

@@ -62,12 +62,16 @@ services:
         condition: service_healthy
     environment:
       MLFLOW_S3_IGNORE_TLS: "true"
+    # --serve-artifacts + --artifacts-destination: clients on the HOST upload via HTTP.
+    # Using only --default-artifact-root without serving makes the client try file:/mlflow/... on the
+    # host -> PermissionError. See README (MLflow artifacts from host).
     command: >
       mlflow server
       --host 0.0.0.0
       --port 5000
       --backend-store-uri postgresql://${POSTGRES_USER:-mlflow}:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/${POSTGRES_DB:-mlflow}
-      --default-artifact-root /mlflow/artifacts
+      --serve-artifacts
+      --artifacts-destination /mlflow/artifacts
     ports:
       - "5000:5000"
     volumes:
