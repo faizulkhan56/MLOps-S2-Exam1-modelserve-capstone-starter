@@ -20,6 +20,9 @@ htmlcov/
 coverage.xml
 *.cover
 
+# Kaggle / large raw data (keep local only)
+data/
+
 # Feast / ML artifacts (generated locally; do not commit large data)
 feast_repo/registry.db
 feast_repo/**/registry.db

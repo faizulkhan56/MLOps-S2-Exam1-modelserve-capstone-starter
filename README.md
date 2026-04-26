@@ -51,6 +51,10 @@ A production-style ML serving stack: FastAPI, MLflow, Feast, Redis, Postgres, Pr
    docker compose down
    ```
 
+### Grafana: `failed to bind host port 0.0.0.0:3000`
+
+Compose publishes **`${GRAFANA_PORT:-3001}`** on the host. If the error still mentions **port 3000**, a **`.env`** file in the project root almost certainly has **`GRAFANA_PORT=3000`** (often copied from an old template). That value **overrides** the 3001 default. Edit `.env` to `GRAFANA_PORT=3001` or **remove** the line, then `docker compose down` and `docker compose up -d`. Confirm with `docker compose config | grep -A2 grafana` (published port should be **3001**).
+
 ### MLflow + Postgres: `No module named 'psycopg2'`
 
 The stock `ghcr.io/mlflow/mlflow` image does not ship the PostgreSQL driver. This repo builds **`modelserve-mlflow:local`** from `docker/mlflow/Dockerfile`, which extends that image and installs `psycopg2-binary` (and `boto3` for S3 later). If you still see the error after pulling changes:
@@ -81,9 +85,41 @@ See **`.env.example`** for port defaults, future MLflow/Feast settings, and Graf
 
 Full design, ADRs, and runbook: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (to be completed per exam rubric).
 
-## Dataset (training)
+## Dataset (Kaggle — required for training)
 
-Fraud dataset (Kaggle): [Credit Card Transactions Fraud Detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) — use `fraudTrain.csv`; entity id **`cc_num`**.
+Official dataset page (download via Kaggle UI or API after `kaggle datasets download`):
+
+**https://www.kaggle.com/datasets/kartik2112/fraud-detection**
+
+| Item | Notes |
+|------|--------|
+| Primary file | `fraudTrain.csv` (~1.3M rows) for training; `fraudTest.csv` optional for holdout |
+| Entity key | **`cc_num`** (credit card number) — used as Feast entity and API `entity_id` |
+| Local path | Keep CSVs **outside git** (large); point `training/train.py` at your path, e.g. `data/raw/` (add `data/` to `.gitignore` if you create it) |
+
+---
+
+## Phase 3 & Phase 4 — plan (before implementation)
+
+Use this checklist after Phases 1–2 are green. **Do not start Pulumi / CI** until this local path works.
+
+### Phase 3 — MLflow registration
+
+1. Implement or finish **`training/train.py`**: load `fraudTrain.csv`, train a sklearn-compatible model, log metrics/params, save **`training/`** or **`provided/`** model artifact (`.pkl` under the exam’s size limit), register to MLflow **or** emit `.pkl` for a separate register step.
+2. Add **`scripts/wait_for_mlflow.py`**: block until `MLFLOW_TRACKING_URI` (e.g. `http://localhost:5000`) is ready.
+3. Add **`scripts/register_model.py`**: load `.pkl`, `mlflow.register_model` (or `log` + `register`), set **Production** stage (or your chosen alias), print version id.
+4. **Validate:** MLflow UI shows model + version in **Production**; optional `mlflow.pyfunc.load_model` smoke test from host.
+5. Update **`requirements.txt`** with `mlflow`, `scikit-learn`, `pandas`, `numpy` (and pins as needed); rebuild **api** image when you add deps for containers.
+
+### Phase 4 — Feast (Redis online store)
+
+1. Complete **`feast_repo/feature_store.yaml`**: `registry` path, **Redis** online store (host `redis` in Compose), **parquet** offline source pointing at **`training/features.parquet`** (produced in training).
+2. Complete **`feast_repo/feature_definitions.py`**: entity **`cc_num`**, feature view(s) aligned with Parquet columns.
+3. Run **`feast apply`** (from `feast_repo/` with Redis up).
+4. Implement **`scripts/materialize_features.py`**: `materialize` / `materialize-incremental` for a window covering your data; print sample entity id for tests.
+5. **Validate:** `feast` CLI lists entities/views; **Python** `get_online_features` for one `cc_num` returns rows.
+
+**Then:** Phase 5 wires FastAPI to MLflow registry + Feast SDK (`POST /predict`, explain route, full metrics).
 
 ---
 
