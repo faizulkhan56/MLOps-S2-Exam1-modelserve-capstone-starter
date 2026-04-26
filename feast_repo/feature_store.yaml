@@ -1,8 +1,9 @@
 # Feast project config (local dev: file offline + Redis online)
 # Apply from repo root:  feast -c feast_repo apply
 #
-# Redis URL: use 127.0.0.1 when running scripts on the host with published port 6379.
-# Inside Docker, re-apply with redis://redis:6379/0 if you materialize from a container.
+# IMPORTANT: use host:port,db=... format for this Feast + redis-py combination.
+# URL form (redis://...) may be parsed incorrectly in some environments.
+# Host-side scripts on Poridhi VM should use 127.0.0.1 (compose publishes 6379).
 
 project: modelserve
 registry: data/registry.db
@@ -11,7 +12,7 @@ entity_key_serialization_version: 2
 
 online_store:
   type: redis
-  connection_string: "redis://127.0.0.1:6379/0"
+  connection_string: "127.0.0.1:6379,db=0"
 
 offline_store:
   type: file

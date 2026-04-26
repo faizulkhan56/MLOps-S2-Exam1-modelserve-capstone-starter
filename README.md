@@ -141,7 +141,7 @@ Official dataset page (download via Kaggle UI or API after `kaggle datasets down
    feast -c feast_repo apply
    python scripts/materialize_features.py
    ```
-   `feature_store.yaml` uses **`redis://127.0.0.1:6379/0`** for materialization from the **host** (same as Compose-published Redis). If you **materialize from inside a container** later, use `redis://redis:6379/0` in a copy of the config or override via doc.
+  `feature_store.yaml` uses **`127.0.0.1:6379,db=0`** for materialization from the **host** (same as Compose-published Redis). This avoids URL parsing issues (`ValueError ... //127.0.0.1`) seen in some Feast + redis-py combinations.
 
 6. **Validate**
    - MLflow UI: model version in **Production**.
