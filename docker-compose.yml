@@ -50,8 +50,12 @@ services:
       retries: 10
     networks: [modelserve]
 
+  # Custom build: base image lacks psycopg2 required for --backend-store-uri postgresql://...
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.16.0
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    image: modelserve-mlflow:local
     restart: unless-stopped
     depends_on:
       postgres:

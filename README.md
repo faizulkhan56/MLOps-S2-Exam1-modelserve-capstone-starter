@@ -51,6 +51,15 @@ A production-style ML serving stack: FastAPI, MLflow, Feast, Redis, Postgres, Pr
    docker compose down
    ```
 
+### MLflow + Postgres: `No module named 'psycopg2'`
+
+The stock `ghcr.io/mlflow/mlflow` image does not ship the PostgreSQL driver. This repo builds **`modelserve-mlflow:local`** from `docker/mlflow/Dockerfile`, which extends that image and installs `psycopg2-binary` (and `boto3` for S3 later). If you still see the error after pulling changes:
+
+```bash
+docker compose build --no-cache mlflow
+docker compose up -d
+```
+
 ## REST endpoints (Phases 1–2)
 
 | Method | Path | Description |
