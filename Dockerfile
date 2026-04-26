@@ -1,28 +1,20 @@
-# ============================================================================
-# ModelServe — FastAPI Inference Service Dockerfile
-# ============================================================================
-# TODOMANY: Implement a multi-stage Docker build.
-#
-# Requirements:
-#   - Multi-stage build (at least two FROM statements)
-#   - Final image must be under 800 MB
-#   - Must run as a non-root user
-#   - Must use a production WSGI/ASGI server (gunicorn with uvicorn workers)
-#   - Must include a HEALTHCHECK directive
-#   - Must copy only what's needed (use .dockerignore too)
-#
-# Suggested stages:
-#   Stage 1 (builder):
-#     - Start from python:3.10-slim
-#     - Install build dependencies (gcc, etc.)
-#     - Copy requirements.txt and install Python packages
-#
-#   Stage 2 (runtime):
-#     - Start from python:3.10-slim (clean)
-#     - Copy installed packages from builder stage
-#     - Copy application code
-#     - Create a non-root user and switch to it
-#     - Expose the service port
-#     - Set the healthcheck
-#     - Define the CMD with gunicorn/uvicorn
-# ============================================================================
+# ModelServe — API image (Phases 1–2: single-stage; Phase 8 will add multi-stage hardening)
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# No build-essential yet: Phase 1–2 deps are pure wheels. Add gcc when mlflow/sklearn land.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ app/
+
+# Feast repo path mounted at runtime; include minimal copy for local builds
+COPY feast_repo/ feast_repo/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

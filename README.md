@@ -1,51 +1,81 @@
 # ModelServe
 
-> MLOps with Cloud Season 2 — Capstone Exam
+> MLOps with Cloud — Season 2, Capstone (ModelServe)
 
-<!-- TODO: Write a 2-3 sentence project description -->
+A production-style ML serving stack: FastAPI, MLflow, Feast, Redis, Postgres, Prometheus, and Grafana, with Pulumi and GitHub Actions in later phases.
+
+**Phases 1–2 (current):** repository bootstrap and a **local Docker Compose** stack. Inference, MLflow registration, and Feast are implemented in **Phases 3–4+**.
 
 ## Prerequisites
 
-<!-- TODO: List everything needed to run this project -->
+- **Docker** and **Docker Compose** v2
+- (Optional) **Python 3.10+** for local scripts **outside** containers
 
-## Quick Start (Local Development)
+## Quick start (local stack)
 
-<!-- TODO: Step-by-step instructions to go from fresh clone to working stack.
-     A grader should be able to follow these and have the system running
-     in under 15 minutes. -->
+1. **Optional** — use a local env file for ports and secrets (defaults work for Compose):
+   ```bash
+   cp .env.example .env
+   # edit as needed; Compose also reads `.env` for variable substitution when present
+   ```
 
-## REST Endpoints
+2. **Build and start all services** (or start base services first, see below):
+   ```bash
+   docker compose up -d --build
+   ```
 
-<!-- TODO: Fill in this table -->
+3. **Check containers:**
+   ```bash
+   docker compose ps
+   ```
+
+4. **Smoke tests**
+
+   | Check | Command | Expected |
+   |-------|---------|----------|
+   | API health | `curl -s http://localhost:8000/health` | JSON with `"status": "healthy"`, `"model_version": "not_loaded"` |
+   | API metrics | `curl -s http://localhost:8000/metrics` | Prometheus text; includes `modelserve_` and default process metrics |
+   | MLflow UI | open `http://localhost:5000` | MLflow home page |
+   | Redis | `docker compose exec redis redis-cli PING` | `PONG` |
+   | Prometheus | `http://localhost:9090/targets` | `modelserve-api` and `node-exporter` **UP** |
+   | Grafana | `http://localhost:3000` (default `admin` / `admin` unless set in `.env`) | UI loads; Prometheus datasource and placeholder dashboard provisioned |
+
+5. **Base services only (optional sequence from the operations playbook)**
+   ```bash
+   docker compose up -d postgres redis mlflow
+   ```
+   Then verify Postgres is healthy, Redis PING, MLflow UI on port **5000**.
+
+6. **Stop**
+   ```bash
+   docker compose down
+   ```
+
+## REST endpoints (Phases 1–2)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | |
-| POST | `/predict` | |
-| GET | `/predict/<id>?explain=true` | |
-| GET | `/metrics` | |
+| GET | `/health` | Liveness; model not yet loaded from registry |
+| GET | `/metrics` | Prometheus metrics |
 
-## Environment Variables
+`POST /predict` and `GET /predict/{id}?explain=true` are added in **Phase 5**.
 
-<!-- TODO: List all environment variables with descriptions.
-     Must match .env.example -->
+## Environment variables
+
+See **`.env.example`** for port defaults, future MLflow/Feast settings, and Grafana admin credentials.
 
 ## GitHub Secrets
 
-<!-- TODO: List all secrets the CI/CD pipeline needs (without values) -->
+(Added when CI/CD is implemented.) See `.env.example` and future `docs/ARCHITECTURE.md`.
 
-| Secret | Purpose |
-|--------|---------|
-| | |
+## Engineering documentation
 
-## Engineering Documentation
+Full design, ADRs, and runbook: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (to be completed per exam rubric).
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture documentation, ADRs, runbook, and known limitations.
+## Dataset (training)
 
-## Dataset
-
-[Credit Card Transactions Fraud Detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) — Simulated credit card transactions generated using Sparkov. Use `fraudTrain.csv` (~1.3M rows, 22 features). Entity key: `cc_num`.
+Fraud dataset (Kaggle): [Credit Card Transactions Fraud Detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) — use `fraudTrain.csv`; entity id **`cc_num`**.
 
 ---
 
-*MLOps with Cloud Season 2 — Capstone: ModelServe | Poridhi.io*
+*MLOps with Cloud — Season 2, Capstone: ModelServe | Poridhi.io*
