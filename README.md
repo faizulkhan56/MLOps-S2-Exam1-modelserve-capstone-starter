@@ -38,7 +38,7 @@ A production-style ML serving stack: FastAPI, MLflow, Feast, Redis, Postgres, Pr
    | MLflow UI | open `http://localhost:5000` | MLflow home page |
    | Redis | `docker compose exec redis redis-cli PING` | `PONG` |
    | Prometheus | `http://localhost:9090/targets` | `modelserve-api` and `node-exporter` **UP** |
-   | Grafana | `http://localhost:3000` (default `admin` / `admin` unless set in `.env`) | UI loads; Prometheus datasource and placeholder dashboard provisioned |
+   | Grafana | `http://localhost:3001` (default host port; override `GRAFANA_PORT` in `.env`) | UI loads; Prometheus datasource and placeholder dashboard provisioned |
 
 5. **Base services only (optional sequence from the operations playbook)**
    ```bash
