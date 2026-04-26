@@ -1,26 +1,58 @@
-# ============================================================================
-# ModelServe — Feast Feature Definitions
-# ============================================================================
-# TODO: Define your Feast entities, data sources, and feature views.
-#
-# You need to create:
-#
-#   1. Entity — the credit card number (cc_num) from the dataset
-#      - This is the join key for feature lookups
-#
-#   2. FileSource (or S3 source) — points to your features.parquet file
-#      - Must specify the timestamp_field for point-in-time joins
-#
-#   3. FeatureView — maps the entity to features from the data source
-#      - List every feature with its data type (Float64, Int64, String, etc.)
-#      - Set a TTL (time-to-live) for feature freshness
-#
-# The features defined here must match exactly what train.py exports
-# to features.parquet and what the FastAPI service requests from Feast.
-#
-# After defining these, run:
-#   cd feast_repo && feast apply
-#   python scripts/materialize_features.py
-#
-# Refer to Feast documentation: https://docs.feast.dev/
-# ============================================================================
+"""
+Feast entities, FileSource, and FeatureView for fraud features.
+Must match training/features.parquet (see training/feature_schema.py — keep column names in sync).
+
+Apply from repo root:
+  feast -c feast_repo apply
+"""
+from __future__ import annotations
+
+from datetime import timedelta
+from pathlib import Path
+
+from feast import Entity, FeatureView, Field, FileSource
+from feast.types import Float64
+
+FEAST_ROOT = Path(__file__).resolve().parent
+ROOT = FEAST_ROOT.parent
+
+# Keep in sync with training/feature_schema.py
+ENTITY_ID_COL = "cc_num"
+EVENT_TIMESTAMP_COL = "event_timestamp"
+FEAST_NUMERIC_FEATURE_COLS = (
+    "amt",
+    "lat",
+    "long",
+    "city_pop",
+    "merch_lat",
+    "merch_long",
+    "unix_time",
+    "zip",
+    "gender_code",
+)
+
+PARQUET_PATH = ROOT / "training" / "features.parquet"
+
+cc_num_entity = Entity(
+    name=ENTITY_ID_COL,
+    join_keys=[ENTITY_ID_COL],
+    description="Credit card number (Kaggle entity id)",
+)
+
+fraud_parquet = FileSource(
+    name="fraud_parquet",
+    path=str(PARQUET_PATH),
+    timestamp_field=EVENT_TIMESTAMP_COL,
+)
+
+_schema = [Field(name=name, dtype=Float64) for name in FEAST_NUMERIC_FEATURE_COLS]
+
+fraud_txn_features = FeatureView(
+    name="fraud_txn_features",
+    entities=[cc_num_entity],
+    ttl=timedelta(days=365 * 5),
+    schema=_schema,
+    online=True,
+    source=fraud_parquet,
+    tags={"team": "modelserve"},
+)
