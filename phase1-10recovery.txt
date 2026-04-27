@@ -1,0 +1,221 @@
+Use this as your fresh Poridhi VM full recovery checklist for Phase 1–10.
+
+Fresh VM setup: Phase 1–10 recovery
+Step 0: Base tools
+sudo apt update
+sudo apt install -y python3-venv python3-pip python-is-python3 unzip git curl
+
+If Docker is not preinstalled:
+
+docker --version
+docker compose version
+
+If Docker exists but needs permission:
+
+sudo usermod -aG docker $USER
+
+Then log out/in.
+
+Phase 1–4 recovery
+Step 1: Clone / pull repo
+cd ~/code
+git clone https://github.com/faizulkhan56/MLOps-S2-Exam1-modelserve-capstone-starter.git
+cd MLOps-S2-Exam1-modelserve-capstone-starter
+
+If already cloned:
+
+cd ~/code/MLOps-S2-Exam1-modelserve-capstone-starter
+git pull
+Step 2: Python venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+Step 3: .env
+cp .env.example .env
+Step 4: Start local stack
+docker compose up -d --build
+docker ps
+
+Validate:
+
+curl http://localhost:8000/health
+curl http://localhost:5000
+curl http://localhost:9090/api/v1/targets
+curl http://localhost:3001/api/health
+docker compose exec redis redis-cli PING
+
+Expected Redis:
+
+PONG
+Kaggle dataset setup
+Step 5: Kaggle CLI
+pip install kaggle
+Step 6: Kaggle token
+mkdir -p ~/.kaggle
+echo '{"username":"YOUR_KAGGLE_USERNAME","key":"YOUR_KAGGLE_KEY"}' > ~/.kaggle/kaggle.json
+chmod 700 ~/.kaggle
+chmod 600 ~/.kaggle/kaggle.json
+Step 7: Download dataset
+mkdir -p data/raw
+cd data/raw
+kaggle datasets download -d kartik2112/fraud-detection
+unzip fraud-detection.zip
+ls -lh
+cd ~/code/MLOps-S2-Exam1-modelserve-capstone-starter
+
+Expected:
+
+fraudTrain.csv
+fraudTest.csv
+fraud-detection.zip
+Step 8: Train + register model
+source .venv/bin/activate
+python scripts/wait_for_mlflow.py
+python training/train.py
+
+Verify MLflow registry:
+
+python - <<'PY'
+from mlflow.tracking import MlflowClient
+client = MlflowClient(tracking_uri="http://127.0.0.1:5000")
+for model in client.search_registered_models():
+    print(model.name, [(v.version, v.current_stage) for v in model.latest_versions])
+PY
+
+Expected:
+
+modelserve_classifier [('1', 'Production')]
+
+Version may be higher if retrained.
+
+Step 9: Feast apply
+feast -c feast_repo apply
+feast -c feast_repo entities list
+feast -c feast_repo feature-views list
+
+Expected:
+
+cc_num
+fraud_txn_features
+Step 10: Materialize features
+python scripts/materialize_features.py
+
+Expected:
+
+fraud_txn_features:
+100%
+Done.
+Phase 5–6 recovery
+
+After Phase 1–4 is ready:
+
+docker compose build api
+docker compose up -d api
+pytest app/tests/ -q
+
+Validate:
+
+curl -s http://localhost:8000/health
+curl -s -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d @training/sample_request.json
+curl -s http://localhost:8000/metrics | grep prediction_
+
+Expected:
+
+/health returns "status":"healthy"
+/predict returns prediction and probability
+tests pass
+Phase 7–8 recovery
+
+Start/restart monitoring stack:
+
+docker compose up -d --build
+
+Validate Prometheus targets:
+
+curl -s http://localhost:9090/api/v1/targets | grep -E '"health":"up"|modelserve-api|node-exporter'
+
+Validate rules:
+
+curl -s http://localhost:9090/api/v1/rules | grep -E 'ModelServeHighPredictionLatencyP95|ModelServeHighPredictionErrorRate|ModelServeAPIDown'
+
+Validate Grafana:
+
+curl -s http://localhost:3001/api/health
+
+Validate container hardening:
+
+docker exec modelserve-api-1 whoami
+docker inspect modelserve-api-1 --format='{{json .State.Health}}'
+
+Expected:
+
+Prometheus targets are up
+3 alert rules loaded
+Grafana database ok
+API user is not root
+Phase 9–10 recovery / Pulumi local run
+Step 11: AWS CLI config
+aws configure
+
+Use:
+
+Region: ap-southeast-1
+Output: json
+
+Verify:
+
+aws sts get-caller-identity
+Step 12: Pulumi login
+pulumi login
+pulumi whoami
+Step 13: SSH key
+mkdir -p .keys
+ssh-keygen -t rsa -b 4096 -f .keys/modelserve-key -N ""
+Step 14: Pulumi dependencies
+cd infrastructure
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+Step 15: Stack setup
+pulumi stack select dev || pulumi stack init dev
+pulumi config set aws:region ap-southeast-1
+pulumi config set sshPublicKey "$(cat ../.keys/modelserve-key.pub)"
+Step 16: Preview + create AWS resources
+pulumi preview
+pulumi up --yes
+pulumi stack output
+
+Expected outputs:
+
+instance_public_ip
+grafana_url
+prometheus_url
+mlflow_url
+s3_bucket_name
+ml_inference_repo_url
+Step 17: SSH to EC2
+EC2_IP=$(pulumi stack output instance_public_ip)
+ssh -i ../.keys/modelserve-key ubuntu@$EC2_IP
+EC2 deploy script usage
+
+On EC2, after SSH:
+
+export MODELSERVE_REPO_URL="https://github.com/faizulkhan56/MLOps-S2-Exam1-modelserve-capstone-starter.git"
+export MODELSERVE_BRANCH="main"
+
+Then inside cloned repo:
+
+chmod +x scripts/deploy_ec2.sh
+./scripts/deploy_ec2.sh
+
+Important: EC2 also needs the Kaggle dataset before training can succeed. If deploy_ec2.sh stops at missing fraudTrain.csv, upload/download Kaggle data on EC2, then rerun.
+
+Validate public endpoints:
+
+curl http://$EC2_IP:8000/health
+curl http://$EC2_IP:9090/api/v1/rules
+curl http://$EC2_IP:3001/api/health
+curl http://$EC2_IP:5000
