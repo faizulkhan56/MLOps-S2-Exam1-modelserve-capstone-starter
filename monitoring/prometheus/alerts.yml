@@ -1,2 +1,44 @@
-# Alert rules (Phase 7: add high latency, high error rate, service down, etc.)
-groups: []
+# Alert rules — ModelServe (Phase 7)
+# Requires Prometheus to load this file via rule_files in prometheus.yml
+
+groups:
+  - name: modelserve-api
+    interval: 30s
+    rules:
+      - alert: ModelServeHighPredictionLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(prediction_duration_seconds_bucket{job="modelserve-api"}[5m])
+            )
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 prediction latency (ModelServe API)"
+          description: "p95 latency over 5m is above 2s for job modelserve-api."
+
+      - alert: ModelServeHighPredictionErrorRate
+        expr: |
+          (
+            sum(rate(prediction_errors_total{job="modelserve-api"}[5m]))
+            /
+            clamp_min(sum(rate(prediction_requests_total{job="modelserve-api"}[5m])), 1e-9)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High prediction error rate (ModelServe API)"
+          description: "More than 10% of /predict requests are failing (5m error / request rate)."
+
+      - alert: ModelServeAPIDown
+        expr: up{job="modelserve-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ModelServe API target is down"
+          description: "Prometheus cannot scrape api:8000 /metrics (up==0)."
