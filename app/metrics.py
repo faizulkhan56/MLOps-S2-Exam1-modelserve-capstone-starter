@@ -1,30 +1,44 @@
-# ============================================================================
-# ModelServe — Prometheus Metrics
-# ============================================================================
-# TODO: Define Prometheus metrics for the inference service.
-#
-# Required metrics (from exam document):
-#   - prediction_requests_total (Counter)
-#       Total number of prediction requests received
-#
-#   - prediction_duration_seconds (Histogram)
-#       Time taken to process each prediction (feature fetch + model inference)
-#
-#   - prediction_errors_total (Counter)
-#       Number of failed prediction requests
-#
-#   - model_version_info (Gauge with a "version" label)
-#       Currently served model version — set once on startup
-#
-#   - feast_online_store_hits_total (Counter)
-#       Successful feature lookups from Feast
-#
-#   - feast_online_store_misses_total (Counter)
-#       Failed or empty feature lookups from Feast
-#
-# Use the prometheus_client library:
-#   from prometheus_client import Counter, Histogram, Gauge
-#
-# To expose metrics at /metrics, use generate_latest() from prometheus_client
-# and return it as a Starlette Response with the correct content type.
-# ============================================================================
+"""Prometheus metrics for the inference service."""
+
+from __future__ import annotations
+
+from prometheus_client import Counter, Gauge, Histogram
+
+prediction_requests_total = Counter(
+    "prediction_requests_total",
+    "Total POST /predict requests received.",
+)
+
+prediction_duration_seconds = Histogram(
+    "prediction_duration_seconds",
+    "Wall time for a prediction (Feast fetch + model inference).",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
+prediction_errors_total = Counter(
+    "prediction_errors_total",
+    "Failed prediction requests.",
+    labelnames=("reason",),
+)
+
+feast_online_store_hits_total = Counter(
+    "feast_online_store_hits_total",
+    "Successful Feast online feature lookups.",
+)
+
+feast_online_store_misses_total = Counter(
+    "feast_online_store_misses_total",
+    "Feast lookups with missing or unusable feature rows.",
+    labelnames=("reason",),
+)
+
+model_version_info = Gauge(
+    "model_version_info",
+    "Currently served MLflow model (labels identify name and version).",
+    labelnames=("model_name", "version"),
+)
+
+
+def set_served_model(model_name: str, version: str) -> None:
+    """Expose one active series for the served model (value is always 1)."""
+    model_version_info.labels(model_name=model_name, version=version).set(1)
