@@ -1,0 +1,7 @@
+# Stack config for `pulumi stack select dev` (or first-time: pulumi stack init dev)
+# Set SSH public key before deploy:
+#   pulumi config set --secret sshPublicKey "$(cat ~/.ssh/id_ed25519.pub)"
+# Or (non-secret):
+#   pulumi config set sshPublicKey "$(cat ~/.ssh/id_rsa.pub)"
+config:
+  aws:region: ap-southeast-1

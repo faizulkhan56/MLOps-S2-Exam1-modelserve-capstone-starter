@@ -135,7 +135,8 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       # Host port: default 3001 (3000 is often in use). If you still get "bind 3000", your .env
       # probably sets GRAFANA_PORT=3000 — change to 3001 or remove that line; .env overrides :- defaults.
-      GF_SERVER_ROOT_URL: "http://localhost:${GRAFANA_PORT:-3001}"
+      # Default matches published host port 3001; override GF_SERVER_ROOT_URL in .env on EC2 (see scripts/deploy_ec2.sh).
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-http://localhost:3001}
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     volumes:
