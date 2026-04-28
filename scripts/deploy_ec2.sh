@@ -100,7 +100,23 @@ sleep 8
 
 echo "==> Validate API"
 
-curl -fsS http://127.0.0.1:8000/health | python -m json.tool
+api_ok=0
+for i in {1..30}; do
+  if curl -fsS http://127.0.0.1:8000/health | python -m json.tool; then
+    echo "API is healthy"
+    api_ok=1
+    break
+  fi
+
+  echo "Waiting for API health... attempt $i/30"
+  sleep 5
+done
+
+if [[ "$api_ok" -ne 1 ]]; then
+  echo "ERROR: API did not become healthy" >&2
+  docker compose logs api --tail=100
+  exit 1
+fi
 
 echo ""
 echo "Deployment completed"

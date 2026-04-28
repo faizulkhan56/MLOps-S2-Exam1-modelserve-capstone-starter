@@ -1,8 +1,9 @@
 """
-ModelServe — AWS infrastructure (Phase 9).
-Single EC2 + Docker Compose topology: VPC, public subnet, SG, EIP, S3, ECR, IAM.
+ModelServe AWS infrastructure.
+Single EC2 + Docker Compose topology.
 Region: ap-southeast-1
 """
+
 from __future__ import annotations
 
 import json
@@ -28,7 +29,6 @@ ssh_public_key = cfg.require("sshPublicKey")
 provider = aws.Provider(
     "aws",
     region=REGION,
-    default_tags=aws.ProviderDefaultTagsArgs(tags=PROJECT_TAG),
 )
 
 invoke_opts = pulumi.InvokeOptions(provider=provider)
@@ -105,7 +105,7 @@ ssh_key = aws.ec2.KeyPair(
 sg = aws.ec2.SecurityGroup(
     "modelserve-sg",
     vpc_id=vpc.id,
-    description="ModelServe capstone — SSH + app ports only",
+    description="ModelServe capstone - SSH and app ports only",
     egress=[
         aws.ec2.SecurityGroupEgressArgs(
             protocol="-1",
@@ -194,14 +194,17 @@ ec2_policy_doc = pulumi.Output.all(
             "Statement": [
                 {
                     "Effect": "Allow",
-                    "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"],
+                    "Action": [
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:ListBucket",
+                        "s3:DeleteObject",
+                    ],
                     "Resource": [args[0], f"{args[0]}/*"],
                 },
                 {
                     "Effect": "Allow",
-                    "Action": [
-                        "ecr:GetAuthorizationToken",
-                    ],
+                    "Action": ["ecr:GetAuthorizationToken"],
                     "Resource": "*",
                 },
                 {
@@ -234,36 +237,45 @@ instance_profile = aws.iam.InstanceProfile(
     "modelserve-ec2-profile",
     name="modelserve-ec2-profile",
     role=ec2_role.name,
-    tags=tags({"Name": "modelserve-ec2-profile"}),
     opts=pulumi.ResourceOptions(provider=provider),
 )
 
 USER_DATA = r"""#!/bin/bash
 set -euxo pipefail
+
 export DEBIAN_FRONTEND=noninteractive
+
 apt-get update
-apt-get install -y ca-certificates curl gnupg git unzip
+apt-get install -y ca-certificates curl gnupg git unzip python3-venv python3-pip python-is-python3 awscli
+
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
 chmod a+r /etc/apt/keyrings/docker.gpg
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list
+
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" \
+  > /etc/apt/sources.list.d/docker.list
+
 apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
 usermod -aG docker ubuntu || true
+
 systemctl enable docker
 systemctl start docker
-apt-get install -y awscli
+
 touch /var/log/modelserve-bootstrap.done
 """
 
 instance = aws.ec2.Instance(
     "modelserve-ec2",
     ami=ubuntu_ami.id,
-    instance_type="t3.small",
+    instance_type="t3.medium",
     subnet_id=subnet.id,
     vpc_security_group_ids=[sg.id],
     key_name=ssh_key.key_name,
-    iam_instance_profile=instance_profile.name,
     associate_public_ip_address=True,
     user_data=USER_DATA,
     user_data_replace_on_change=False,
