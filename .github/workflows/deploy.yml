@@ -1,39 +1,125 @@
-# ============================================================================
-# ModelServe — GitHub Actions CI/CD Pipeline
-# ============================================================================
-# TODO: Implement the full CI/CD pipeline.
-#
-# Required jobs:
-#
-#   1. test
-#      - Triggers on: every push and pull request
-#      - Steps: checkout, setup Python, install dependencies, run pytest
-#      - Must pass before any other job runs
-#
-#   2. build-and-push
-#      - Triggers on: push to main only (after test passes)
-#      - Steps: checkout, configure AWS credentials, login to ECR,
-#               build Docker image, tag with :latest and :$GITHUB_SHA,
-#               push to ECR
-#      - Needs: test
-#
-#   3. deploy
-#      - Triggers on: push to main only (after build-and-push passes)
-#      - Steps: connect to deployment target, pull new images,
-#               restart services, verify health endpoint returns 200
-#      - Needs: build-and-push
-#
-# Optional additional jobs:
-#   - infrastructure: run pulumi up before build-and-push
-#   - lint: run flake8 or ruff
-#   - security-scan: run Trivy on built images (bonus marks)
-#
-# Required GitHub Secrets (document these in your README):
-#   - AWS_ACCESS_KEY_ID
-#   - AWS_SECRET_ACCESS_KEY
-#   - PULUMI_ACCESS_TOKEN
-#   - SSH_PRIVATE_KEY (if deploying to EC2 via SSH)
-#   - SSH_PUBLIC_KEY (if Pulumi creates key pairs)
-#
-# Refer to the Pulumi/CI/CD lab from Episodes 2-3 for patterns.
-# ============================================================================
+# Phase 11 — Push to main: Pulumi up (dev) + remote EC2 pipeline deploy
+name: Deploy (Pulumi + EC2)
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pulumi-and-ec2:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+      SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Pulumi CLI
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "${HOME}/.pulumi/bin" >> "${GITHUB_PATH}"
+
+      - name: Pulumi — venv, stack dev, config, up
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          python -m venv venv
+          . venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pulumi login
+          if pulumi stack select dev 2>/dev/null; then
+            echo "Using existing stack: dev"
+          else
+            echo "Creating stack: dev"
+            pulumi stack init dev
+          fi
+          pulumi config set aws:region ap-southeast-1
+          if [[ -z "${SSH_PUBLIC_KEY:-}" ]]; then
+            echo "ERROR: SSH_PUBLIC_KEY secret is empty" >&2
+            exit 1
+          fi
+          pulumi config set sshPublicKey "${SSH_PUBLIC_KEY}"
+          pulumi up --yes
+
+      - name: Read instance IP
+        id: ip
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          . venv/bin/activate
+          pulumi stack select dev
+          IP="$(pulumi stack output instance_public_ip)"
+          echo "ip=${IP}" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup SSH key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/modelserve_ci
+          chmod 600 ~/.ssh/modelserve_ci
+
+      - name: Trust host key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ steps.ip.outputs.ip }}" >> ~/.ssh/known_hosts
+
+      # Pulumi returns when the instance is "running"; user-data may still be installing Docker.
+      - name: Wait for Docker on EC2
+        env:
+          INSTANCE_IP: ${{ steps.ip.outputs.ip }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            if ssh -i ~/.ssh/modelserve_ci -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=20 \
+              "ubuntu@${INSTANCE_IP}" \
+              'sudo docker info >/dev/null 2>&1'; then
+              echo "EC2 Docker daemon is ready."
+              exit 0
+            fi
+            echo "Waiting for Docker on EC2 (attempt ${i}/60)..."
+            sleep 10
+          done
+          echo "ERROR: Docker did not become ready on EC2 in time." >&2
+          exit 1
+
+      - name: Upload and run pipeline script on EC2
+        env:
+          INSTANCE_IP: ${{ steps.ip.outputs.ip }}
+          MODELSERVE_REPO_URL: https://github.com/${{ github.repository }}.git
+          MODELSERVE_BRANCH: ${{ github.ref_name }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/modelserve_ci -o StrictHostKeyChecking=yes \
+            scripts/deploy_ec2_pipeline.sh "ubuntu@${INSTANCE_IP}:~/deploy_ec2_pipeline.sh"
+          ssh -i ~/.ssh/modelserve_ci -o StrictHostKeyChecking=yes "ubuntu@${INSTANCE_IP}" \
+            "export MODELSERVE_REPO_URL='${MODELSERVE_REPO_URL}'; \
+             export MODELSERVE_BRANCH='${MODELSERVE_BRANCH}'; \
+             export KAGGLE_USERNAME='${KAGGLE_USERNAME}'; \
+             export KAGGLE_KEY='${KAGGLE_KEY}'; \
+             chmod +x ~/deploy_ec2_pipeline.sh && bash ~/deploy_ec2_pipeline.sh"

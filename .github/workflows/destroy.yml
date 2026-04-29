@@ -1,0 +1,59 @@
+# Phase 12 — Manual destroy: Pulumi stack dev (workflow_dispatch only)
+name: Destroy (Pulumi)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Pulumi CLI
+        run: |
+          curl -fsSL https://get.pulumi.com | sh
+          echo "${HOME}/.pulumi/bin" >> "${GITHUB_PATH}"
+
+      - name: Pulumi destroy (stack dev)
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          python -m venv venv
+          . venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pulumi login
+          pulumi stack select dev
+          pulumi destroy --yes
+
+      - name: IAM state cleanup hint (if destroy failed)
+        if: failure()
+        run: |
+          echo "If destroy failed because IAM state objects remain, run locally (after pulumi stack select dev):"
+          echo ""
+          echo "  pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/instanceProfile:InstanceProfile::modelserve-ec2-profile'"
+          echo "  pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/rolePolicy:RolePolicy::modelserve-ec2-inline'"
+          echo "  pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/role:Role::modelserve-ec2-role'"
+          echo ""
+          echo "Then rerun this destroy workflow. Do not auto-delete state in CI."
