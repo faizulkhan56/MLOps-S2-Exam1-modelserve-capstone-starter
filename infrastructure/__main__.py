@@ -6,8 +6,6 @@ Region: ap-southeast-1
 
 from __future__ import annotations
 
-import json
-
 import pulumi
 import pulumi_aws as aws
 
@@ -157,86 +155,6 @@ ecr_mlflow = aws.ecr.Repository(
     force_delete=True,
     image_tag_mutability="MUTABLE",
     tags=tags({"Name": "modelserve-mlflow"}),
-    opts=pulumi.ResourceOptions(provider=provider),
-)
-
-assume_role = aws.iam.get_policy_document(
-    statements=[
-        aws.iam.GetPolicyDocumentStatementArgs(
-            actions=["sts:AssumeRole"],
-            principals=[
-                aws.iam.GetPolicyDocumentStatementPrincipalArgs(
-                    type="Service",
-                    identifiers=["ec2.amazonaws.com"],
-                )
-            ],
-        )
-    ],
-    opts=invoke_opts,
-)
-
-ec2_role = aws.iam.Role(
-    "modelserve-ec2-role",
-    name="modelserve-ec2-role",
-    assume_role_policy=assume_role.json,
-    tags=tags({"Name": "modelserve-ec2-role"}),
-    opts=pulumi.ResourceOptions(provider=provider),
-)
-
-ec2_policy_doc = pulumi.Output.all(
-    artifacts_bucket.arn,
-    ecr_api.arn,
-    ecr_mlflow.arn,
-).apply(
-    lambda args: json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": [
-                        "s3:GetObject",
-                        "s3:PutObject",
-                        "s3:ListBucket",
-                        "s3:DeleteObject",
-                    ],
-                    "Resource": [args[0], f"{args[0]}/*"],
-                },
-                {
-                    "Effect": "Allow",
-                    "Action": ["ecr:GetAuthorizationToken"],
-                    "Resource": "*",
-                },
-                {
-                    "Effect": "Allow",
-                    "Action": [
-                        "ecr:BatchCheckLayerAvailability",
-                        "ecr:GetDownloadUrlForLayer",
-                        "ecr:BatchGetImage",
-                        "ecr:PutImage",
-                        "ecr:InitiateLayerUpload",
-                        "ecr:UploadLayerPart",
-                        "ecr:CompleteLayerUpload",
-                    ],
-                    "Resource": [args[1], args[2]],
-                },
-            ],
-        }
-    )
-)
-
-aws.iam.RolePolicy(
-    "modelserve-ec2-inline",
-    name="modelserve-ec2-inline",
-    role=ec2_role.id,
-    policy=ec2_policy_doc,
-    opts=pulumi.ResourceOptions(provider=provider),
-)
-
-instance_profile = aws.iam.InstanceProfile(
-    "modelserve-ec2-profile",
-    name="modelserve-ec2-profile",
-    role=ec2_role.name,
     opts=pulumi.ResourceOptions(provider=provider),
 )
 
