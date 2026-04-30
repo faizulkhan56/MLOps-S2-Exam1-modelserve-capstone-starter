@@ -1,4 +1,4 @@
-# ModelServe
+# ModelServe2
 
 > MLOps with Cloud — Season 2, Capstone (ModelServe)
 
