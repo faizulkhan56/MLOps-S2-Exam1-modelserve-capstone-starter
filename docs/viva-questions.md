@@ -312,4 +312,67 @@
 
 ---
 
+## J. Tuning: changing probabilities & improving inference quality
+
+### Q: Which parameters can we tune so that `fraud_probability` or the prediction changes, and where in the codebase (or outside it) do we change them?
+
+**Short answer:** **`fraud_probability`** is **`predict_proba` class-1** from the **sklearn Pipeline** loaded from MLflow; it changes if the **model** or the **input feature row** changes. **Improve quality** mainly in **`training/train.py`** (data, split, preprocessing, **RandomForest** hyperparameters) and keep **train/serve** alignment via **`training/feature_schema.py`**, **Feast export**, and **`app/main.py`** defaults. **Environment** (`.env`) controls **how much data you train on** and **which registry model** the API loads.
+
+**What the API does today (so you know what “tuning” means):**
+
+- [`app/main.py`](../app/main.py) calls `model_loader.predict(X)`; **`fraud_probability`** is `float(proba[0][1])` — the **positive-class probability** for fraud.
+- **`prediction`** is the **argmax / 0.5 default** from sklearn’s `predict()` (standard **0.5 threshold** for `RandomForestClassifier` in binary case). There is **no separate `FRAUD_THRESHOLD` env var** in this repo; changing the **business threshold** (e.g. flag only if proba &gt; 0.7) would be a **new code path** in `main.py` if you add it.
+
+---
+
+### Plan 1 — Change model quality & probability calibration (retrain)
+
+These affect **both** train-time metrics and live **`fraud_probability`** after you register a new **Production** model and restart the API.
+
+| What | Where | Effect |
+|------|--------|--------|
+| **RandomForest hyperparameters** | [`training/train.py`](../training/train.py) — `RandomForestClassifier(...)` (~lines 187–194): `n_estimators`, `max_depth`, `min_samples_leaf`, `class_weight`, `max_features`, etc. | Stronger/weaker fit, different **probability margins**; `class_weight="balanced"` already mitigates imbalance — try **`balanced_subsample`** or manual weights if you study cost asymmetry. |
+| **Random seed** | Same file: `RANDOM_STATE = 42` and split `random_state` | Reproducibility; different seeds → slightly different trees and **probas**. |
+| **Train/test split** | `train_test_split(..., test_size=0.2, stratify=y, ...)` | More **test** data → different reported metrics; does not change the fitted model unless you also change **training rows**. |
+| **Amount of training data** | Env **`TRAIN_MAX_ROWS`** (read in `_nrows()` / `load_raw()` in `train.py`) | Fewer rows → often **worse** generalization and noisier scores; **full file** usually better if runtime allows. |
+| **Preprocessing** | `train.py`: `SimpleImputer(strategy="median")`, `StandardScaler()`, `OneHotEncoder(..., max_categories=20)` | Different encoding/imputation → different **`X`** entering the forest → different **probas**. |
+| **Feature set** | [`training/feature_schema.py`](../training/feature_schema.py) — `FEAST_NUMERIC_FEATURE_COLS`; plus categorical columns listed in `train.py` (`cat_cols`) | Adding/removing features requires **syncing Feast** ([`feast_repo/feature_definitions.py`](../feast_repo/feature_definitions.py)), **re-export Parquet**, **`feast apply`**, **`materialize_features.py`**, and ensuring the API row order still matches the pipeline (see Plan 3). |
+
+**After any training change:** run **`train.py`** → new MLflow version → **Production** transition (script does this) → **`docker compose up -d --build api`** (or restart API) so [`app/model_loader.py`](../app/model_loader.py) reloads **`models:/${MLFLOW_MODEL_NAME}/${MLFLOW_MODEL_STAGE}`**.
+
+---
+
+### Plan 2 — Change scores without retraining (same model, different inputs)
+
+| What | Where | Effect |
+|------|--------|--------|
+| **Feature values for an entity** | **Feast / Redis** — online row comes from **`training/features.parquet`** via **`scripts/materialize_features.py`** | Same `cc_num`, but if you **re-materialize** after updating Parquet, **numeric features** in Redis change → **`fraud_probability`** changes. |
+| **Default categoricals at inference** | [`app/main.py`](../app/main.py) — `_CAT_DEFAULTS` / `_CAT_ORDER` (`category`, `state`, `gender` = `"unk"`) | Feast only supplies **numeric** columns; the API **injects** string defaults for categoricals the pipeline was trained with. Changing defaults changes the **one-hot** input → changes **proba**. **Keep aligned with training `fillna("unk")`** unless you intentionally change both train and serve. |
+| **Which model version is served** | `.env` / compose: **`MLFLOW_MODEL_NAME`**, **`MLFLOW_MODEL_STAGE`** ([`app/model_loader.py`](../app/model_loader.py)) | Pointing to **Staging** vs **Production** loads a **different artifact** → different scores for the same features. |
+
+---
+
+### Plan 3 — Avoid “improving” train but breaking serve (train/serve skew)
+
+If you change **column lists** or **preprocessing**:
+
+1. Update **`training/train.py`** and **`training/feature_schema.py`** consistently.
+2. Update **`feast_repo/feature_definitions.py`** and run **`feast -c feast_repo apply`**.
+3. Regenerate **`training/features.parquet`** and run **`python scripts/materialize_features.py`**.
+4. Confirm [`app/feature_client.py`](../app/feature_client.py) / [`main.py`](../app/main.py) **column order** still matches the sklearn **`ColumnTransformer`** + pipeline expectations (`_build_model_frame`).
+
+Otherwise probabilities may look “better” offline but **fail or drift** online.
+
+---
+
+### Plan 4 — Optional product-level change (not implemented): custom fraud threshold
+
+To change **`prediction`** (0/1) **without** changing the underlying **`fraud_probability`** distribution, you would add logic such as: *if `fraud_probability >= T` then fraud*, with **`T`** from env (e.g. `FRAUD_THRESHOLD=0.7`). That lives naturally in **[`app/main.py`](../app/main.py)** after `predict_proba`. Today the repo uses sklearn’s default **`predict()`** for **`prediction`**, which is consistent with **0.5** for RF.
+
+---
+
+**Viva one-liner:** *Probability comes from the **loaded MLflow model** and the **feature row** (Feast numerics + API categorical defaults). **Improve** by retraining and hyperparameters in **`train.py`**; **shift live scores** by **materialized features** and **defaults** in **`main.py`**; **avoid skew** by keeping **schema, Feast, and Parquet** in lockstep.*
+
+---
+
 For live demo flow, see [`demo-guide.md`](demo-guide.md). For screenshots and submission expectations, see [`submission-checklist.md`](submission-checklist.md).
