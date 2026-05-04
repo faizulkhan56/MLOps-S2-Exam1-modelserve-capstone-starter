@@ -1,0 +1,1517 @@
+Yes. Below is the full codebase relationship explanation focusing on:
+
+main.py
+train.py
+training + Feast + MLflow + API relationship
+
+Excluding:
+
+infrastructure/
+monitoring/
+tests/
+1. Big picture first
+
+Your project has two main flows:
+
+A. Training flow
+training/train.py
+↓
+reads Kaggle fraudTrain.csv
+↓
+cleans/prepares data
+↓
+trains RandomForest model
+↓
+logs metrics/model to MLflow
+↓
+registers model as Production
+↓
+creates training/features.parquet
+↓
+creates training/sample_request.json
+B. Serving / inference flow
+app/main.py
+↓
+starts FastAPI
+↓
+loads Production model from MLflow
+↓
+initializes Feast client
+↓
+receives entity_id
+↓
+fetches online features from Feast/Redis
+↓
+builds model input dataframe
+↓
+runs prediction
+↓
+returns JSON response
+
+So:
+
+train.py = prepares model + feature data
+main.py = serves prediction using model + features
+2. train.py — line-by-line explanation
+
+Your train.py starts with this purpose:
+
+"""
+Train a baseline fraud classifier, log to MLflow, register in Model Registry (Production),
+export training/features.parquet and training/sample_request.json.
+"""
+
+This means this file has three responsibilities:
+
+1. Train model
+2. Register model in MLflow
+3. Export Feast-compatible feature data
+
+Source:
+
+2.1 Imports
+import json
+import os
+import pickle
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+Meaning:
+
+json     → write sample_request.json
+os       → read environment variables
+pickle   → save local model.pkl
+sys      → exit program if error happens
+datetime → create timestamped MLflow run name
+Path     → handle file paths cleanly
+
+Then:
+
+import numpy as np
+import pandas as pd
+
+Meaning:
+
+numpy  → random entity selection, array handling
+pandas → read CSV, transform dataframe, write parquet
+
+Then sklearn imports:
+
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import (...)
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+These are for:
+
+ColumnTransformer       → separate numeric and categorical preprocessing
+RandomForestClassifier  → actual ML model
+SimpleImputer           → fill missing numeric values
+metrics                 → accuracy, precision, recall, F1, ROC-AUC
+train_test_split        → split train/test data
+Pipeline                → combine preprocessing + model
+OneHotEncoder           → convert category/state/gender text into numeric columns
+StandardScaler          → scale numeric columns
+
+Then:
+
+import mlflow
+import mlflow.sklearn
+from mlflow.tracking import MlflowClient
+
+Meaning:
+
+mlflow              → tracking experiment
+mlflow.sklearn      → log sklearn model to MLflow
+MlflowClient        → move registered model version to Production
+2.2 Root path setup
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+This means:
+
+__file__ = training/train.py
+parent = training/
+parent.parent = project root
+
+So ROOT becomes:
+
+MLOps-S2-Exam1-modelserve-capstone-starter/
+
+Why needed?
+
+Because later you use paths like:
+
+ROOT / data / raw / fraudTrain.csv
+ROOT / training / features.parquet
+ROOT / training / sample_request.json
+2.3 Import shared feature schema
+from training.feature_schema import (
+    ENTITY_ID_COL,
+    EVENT_TIMESTAMP_COL,
+    FEAST_NUMERIC_FEATURE_COLS,
+    RAW_TIMESTAMP_COL,
+    TARGET_COL,
+)
+
+This connects train.py with the rest of your project.
+
+Likely values are conceptually:
+
+ENTITY_ID_COL = cc_num
+TARGET_COL = is_fraud
+RAW_TIMESTAMP_COL = trans_date_trans_time
+EVENT_TIMESTAMP_COL = event_timestamp
+FEAST_NUMERIC_FEATURE_COLS = [
+  amt,
+  lat,
+  long,
+  city_pop,
+  merch_lat,
+  merch_long,
+  unix_time,
+  zip,
+  gender_code
+]
+
+Why this is important:
+
+train.py and Feast definitions must agree on feature names
+API prediction must also use the same feature names
+
+So feature_schema.py is a shared contract.
+
+2.4 Load environment variables
+load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env.example", override=False)
+
+This means:
+
+First read .env
+Then read .env.example only for missing defaults
+
+Example values:
+
+MLFLOW_TRACKING_URI
+MLFLOW_MODEL_NAME
+FRAUD_TRAIN_PATH
+TRAIN_MAX_ROWS
+
+This makes the code work in:
+
+local VM
+EC2
+GitHub Actions pipeline
+Docker runtime
+2.5 Constants
+RANDOM_STATE = 42
+
+This fixes random behavior.
+
+Why?
+
+Same train/test split
+Same sample entity_id selection
+More reproducible training
+MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "modelserve_fraud")
+
+Meaning:
+
+If env has MLFLOW_EXPERIMENT_NAME, use it
+Otherwise use modelserve_fraud
+
+This is why your MLflow UI shows experiment:
+
+modelserve_fraud
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+
+Meaning:
+
+train.py sends logs/model to MLflow server at this URL
+
+Local/EC2 shell uses:
+
+http://127.0.0.1:5000
+
+Inside Docker container it may use:
+
+http://mlflow:5000
+MLFLOW_MODEL_NAME = os.environ.get("MLFLOW_MODEL_NAME", "modelserve_classifier")
+
+This is the registered model name.
+
+Your API later loads this model name.
+
+FRAUD_TRAIN_PATH = os.environ.get("FRAUD_TRAIN_PATH", str(ROOT / "data" / "raw" / "fraudTrain.csv"))
+
+This is where training CSV is expected:
+
+data/raw/fraudTrain.csv
+MODEL_PKL = ROOT / "training" / "model.pkl"
+PARQUET_OUT = ROOT / "training" / "features.parquet"
+SAMPLE_REQUEST = ROOT / "training" / "sample_request.json"
+
+These are generated outputs:
+
+training/model.pkl          → local backup model
+training/features.parquet   → Feast offline feature data
+training/sample_request.json→ valid request body for API
+
+Source:
+
+3. _nrows() function
+def _nrows() -> int | None:
+    raw = os.environ.get("TRAIN_MAX_ROWS", "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+This reads:
+
+TRAIN_MAX_ROWS
+
+Example:
+
+export TRAIN_MAX_ROWS=50000
+
+If set:
+
+read only 50,000 rows
+
+If not set:
+
+read full CSV
+
+Purpose:
+
+CI/CD friendly training
+faster EC2 training
+avoid memory kill
+4. load_raw() function
+def load_raw(path: Path) -> pd.DataFrame:
+
+This function loads Kaggle CSV.
+
+if not path.is_file():
+
+Checks if:
+
+data/raw/fraudTrain.csv exists
+
+If missing, prints helpful error and exits.
+
+nrows = _nrows()
+return pd.read_csv(path, nrows=nrows)
+
+Reads CSV with optional row limit.
+
+So if:
+
+TRAIN_MAX_ROWS=50000
+
+then:
+
+pd.read_csv(path, nrows=50000)
+5. main() in train.py
+
+This is the main training workflow.
+
+5.1 Configure MLflow
+print(f"MLflow tracking URI: {MLFLOW_TRACKING_URI}")
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+This tells MLflow:
+
+Send experiment, metrics, model artifact to this MLflow server
+Use experiment name modelserve_fraud
+5.2 Load raw data
+raw_path = Path(FRAUD_TRAIN_PATH)
+df = load_raw(raw_path)
+
+Loads:
+
+data/raw/fraudTrain.csv
+
+into dataframe df.
+
+5.3 Validate required columns
+for c in (ENTITY_ID_COL, TARGET_COL, RAW_TIMESTAMP_COL):
+    if c not in df.columns:
+
+This checks key columns exist.
+
+Conceptually:
+
+cc_num exists
+is_fraud exists
+trans_date_trans_time exists
+
+Why?
+
+cc_num → Feast entity
+is_fraud → prediction target
+timestamp → Feast event timestamp
+5.4 Convert timestamp
+df[EVENT_TIMESTAMP_COL] = pd.to_datetime(df[RAW_TIMESTAMP_COL], utc=True, errors="coerce")
+
+Feast needs an event timestamp.
+
+Raw column:
+
+trans_date_trans_time
+
+Converted column:
+
+event_timestamp
+
+Why Feast needs timestamp?
+
+Feature stores track feature values over time
+Materialization uses timestamp ranges
+5.5 Create gender_code
+g = df.get("gender", pd.Series("U", index=df.index))
+df["gender_code"] = g.map({"M": 1.0, "F": 0.0}).fillna(0.0)
+
+Original gender is text:
+
+M / F
+
+This creates numeric feature:
+
+M → 1.0
+F → 0.0
+unknown → 0.0
+
+Why?
+
+Feast online features are numeric in your project.
+
+5.6 Convert zip
+df["zip"] = pd.to_numeric(df.get("zip", 0), errors="coerce").fillna(0.0)
+
+Makes zip numeric.
+
+If missing:
+
+0
+5.7 Validate numeric transaction columns
+for c in [
+    "amt",
+    "lat",
+    "long",
+    "city_pop",
+    "merch_lat",
+    "merch_long",
+    "unix_time",
+]:
+
+These are important model/Feast features.
+
+For each:
+
+if c not in df.columns:
+    error
+df[c] = pd.to_numeric(df[c], errors="coerce")
+
+Meaning:
+
+Check column exists
+Convert to number
+Invalid values become NaN
+5.8 Prepare target y
+y = df[TARGET_COL].astype(int)
+
+Target means what the model learns to predict.
+
+In fraud dataset:
+
+is_fraud
+
+Values:
+
+0 = not fraud
+1 = fraud
+good = (y == 0) | (y == 1)
+df, y = df.loc[good].reset_index(drop=True), y[good].to_numpy()
+
+Keeps only valid binary labels.
+
+5.9 Define model input columns
+num_cols = [
+    c
+    for c in [
+        "amt",
+        "lat",
+        "long",
+        "city_pop",
+        "merch_lat",
+        "merch_long",
+        "unix_time",
+        "zip",
+        "gender_code",
+    ]
+    if c in df.columns
+]
+
+These are numeric model input columns.
+
+cat_cols = [c for c in ("category", "state", "gender") if c in df.columns]
+
+These are categorical model input columns.
+
+So model training uses:
+
+Numeric:
+amt, lat, long, city_pop, merch_lat, merch_long, unix_time, zip, gender_code
+
+Categorical:
+category, state, gender
+
+Important: Your Feast online store serves only numeric features. In main.py, categorical columns are filled with default "unk".
+
+5.10 Fill missing values
+for c in num_cols:
+    df[c] = df[c].fillna(0.0)
+
+Numeric missing values become:
+
+0.0
+for c in cat_cols:
+    df[c] = df[c].fillna("unk").astype(str)
+
+Categorical missing values become:
+
+unk
+
+This is important because main.py uses the same default for categorical columns.
+
+5.11 Validate Feast feature columns
+for c in FEAST_NUMERIC_FEATURE_COLS:
+    if c not in df.columns:
+
+This checks all columns required for Feast export exist.
+
+If any is missing:
+
+training stops
+5.12 Create Feast export dataframe
+export = df[[ENTITY_ID_COL, EVENT_TIMESTAMP_COL, *FEAST_NUMERIC_FEATURE_COLS]].copy()
+
+This creates the dataframe that becomes:
+
+training/features.parquet
+
+Its columns are:
+
+cc_num
+event_timestamp
+amt
+lat
+long
+city_pop
+merch_lat
+merch_long
+unix_time
+zip
+gender_code
+
+This is the data Feast later materializes into Redis.
+
+export[ENTITY_ID_COL] = export[ENTITY_ID_COL].astype("int64")
+
+Ensures cc_num is integer.
+
+Why?
+
+Because API request sends:
+
+{"entity_id": 3592325941359225}
+
+and Feast lookup expects matching type.
+
+5.13 Guard against too little data
+if len(y) < 200:
+    print("Not enough rows after filter.", file=sys.stderr)
+    sys.exit(1)
+
+If dataset is too small, stop training.
+
+5.14 Split train/test
+X = df[num_cols + cat_cols]
+
+X = input features for model training.
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+)
+
+Meaning:
+
+80% train
+20% test
+stratify=y keeps fraud/non-fraud balance
+random_state=42 makes reproducible
+6. Model pipeline
+6.1 Numeric preprocessing
+("num",
+ Pipeline([
+   ("imputer", SimpleImputer(strategy="median")),
+   ("scaler", StandardScaler())
+ ]),
+ num_cols)
+
+For numeric columns:
+
+fill missing with median
+scale values
+6.2 Categorical preprocessing
+("cat",
+ OneHotEncoder(handle_unknown="ignore", sparse_output=False, max_categories=20),
+ cat_cols)
+
+For category/state/gender:
+
+convert text to numeric one-hot columns
+ignore unknown categories during prediction
+limit categories to max 20
+
+This is important because during inference main.py uses:
+
+category = unk
+state = unk
+gender = unk
+
+Since encoder has handle_unknown="ignore", it will not crash.
+
+6.3 Combine preprocessing
+pre = ColumnTransformer([...], remainder="drop")
+
+This combines:
+
+numeric transformer
+categorical transformer
+
+and drops columns not listed.
+
+6.4 Define model
+RandomForestClassifier(
+    n_estimators=100,
+    max_depth=20,
+    min_samples_leaf=2,
+    class_weight="balanced",
+    n_jobs=-1,
+    random_state=RANDOM_STATE,
+)
+
+Meaning:
+
+n_estimators=100      → 100 decision trees
+max_depth=20          → each tree limited to depth 20
+min_samples_leaf=2    → at least 2 samples in leaf
+class_weight=balanced → important for fraud imbalance
+n_jobs=-1             → use all CPU cores
+random_state=42       → reproducible
+6.5 Full pipeline
+pipeline = Pipeline([
+    ("prep", pre),
+    ("clf", RandomForestClassifier(...)),
+])
+
+This means the saved/logged model includes both:
+
+preprocessing + classifier
+
+So at inference time, API only needs to pass a dataframe with correct columns.
+
+7. MLflow training run
+with mlflow.start_run(run_name=f"train_{datetime.now(...)}") as run:
+
+Starts a new MLflow run.
+
+Run name example:
+
+train_20260430T093806
+run_id = run.info.run_id
+
+Stores MLflow run ID.
+
+pipeline.fit(X_train, y_train)
+
+This trains the model.
+
+pred = pipeline.predict(X_test)
+
+Predict class:
+
+0 or 1
+proba = pipeline.predict_proba(X_test)[:, 1]
+
+Predict probability of fraud class:
+
+probability for class 1
+7.1 Calculate metrics
+m = {
+    "accuracy": ...,
+    "precision": ...,
+    "recall": ...,
+    "f1": ...,
+}
+
+Meaning:
+
+accuracy  → overall correct predictions
+precision → among predicted fraud, how many were real fraud
+recall    → among real fraud, how many detected
+f1        → balance of precision and recall
+m["roc_auc"] = float(roc_auc_score(y_test, proba))
+
+ROC-AUC measures:
+
+model's ability to separate fraud vs non-fraud
+7.2 Log metrics to MLflow
+for k, v in m.items():
+    mlflow.log_metric(k, v)
+
+This sends metrics to MLflow UI.
+
+That is why you see:
+
+accuracy
+precision
+recall
+f1
+roc_auc
+
+in MLflow.
+
+7.3 Log parameters
+mlflow.log_param("model", "RandomForestClassifier")
+mlflow.log_param("train_rows", int(len(X_train)))
+mlflow.log_param("n_features_raw", int(X_train.shape[1]))
+mlflow.log_param("data_path", str(raw_path))
+
+These store metadata:
+
+which model
+how many rows
+how many raw features
+which data path
+7.4 Log and register model
+mlflow.sklearn.log_model(
+    pipeline,
+    artifact_path="model",
+    registered_model_name=MLFLOW_MODEL_NAME,
+)
+
+This is the key MLflow line.
+
+It:
+
+takes trained pipeline object from memory
+serializes it into MLflow artifact format
+registers it as modelserve_classifier
+creates a new model version
+
+Source:
+
+Important:
+
+It does NOT read training/model.pkl
+It logs the pipeline directly from memory
+8. Move model to Production
+client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+
+Creates MLflow client.
+
+versions = client.search_model_versions(f"name='{MLFLOW_MODEL_NAME}'")
+
+Finds all versions of:
+
+modelserve_classifier
+latest = max(versions, key=lambda v: int(v.version))
+model_version = int(latest.version)
+
+Finds latest model version.
+
+Example:
+
+v1, v2, v3 → pick v3
+client.transition_model_version_stage(
+    MLFLOW_MODEL_NAME,
+    str(model_version),
+    stage="Production",
+    archive_existing_versions=True,
+)
+
+This marks latest model version as:
+
+Production
+
+and archives older Production version.
+
+This is why the API can load the Production model.
+
+9. Save local model.pkl
+with open(MODEL_PKL, "wb") as f:
+    pickle.dump(pipeline, f)
+
+This saves local backup:
+
+training/model.pkl
+
+Source:
+
+Important:
+
+API does not serve this file directly
+MLflow Registry is source of truth
+10. Save features.parquet
+export.to_parquet(PARQUET_OUT, index=False, engine="pyarrow")
+
+This creates:
+
+training/features.parquet
+
+This file is used by Feast materialization.
+
+Purpose:
+
+offline feature source
+
+Later:
+
+scripts/materialize_features.py
+↓
+reads this parquet via Feast
+↓
+loads online features into Redis
+11. Create sample request
+rng = np.random.default_rng(RANDOM_STATE)
+pick = int(rng.choice(export[ENTITY_ID_COL].dropna().unique(), size=1)[0])
+
+This picks one valid cc_num.
+
+Then:
+
+json.dump({"entity_id": pick}, f, indent=2)
+
+Creates:
+
+training/sample_request.json
+
+Example:
+
+{
+  "entity_id": 3592325941359225
+}
+
+That is why your sample entity works.
+
+12. main.py — line-by-line explanation
+
+Your main.py purpose:
+
+"""
+ModelServe — FastAPI inference (Phase 5): MLflow + Feast + Prometheus.
+"""
+
+This is the runtime API file.
+
+It serves:
+
+/health
+/metrics
+/predict
+
+Source:
+
+12.1 Imports
+import logging
+import os
+import time
+
+Meaning:
+
+logging → write app logs
+os      → read env variables
+time    → measure prediction latency
+from contextlib import asynccontextmanager
+
+Used to define FastAPI startup/shutdown lifecycle.
+
+from datetime import datetime, timezone
+
+Used to return UTC timestamp in prediction response.
+
+from typing import Any
+
+Used for flexible dictionary typing.
+
+import pandas as pd
+
+Used to build input dataframe for model prediction.
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, Response
+
+FastAPI creates API server.
+
+JSONResponse returns structured errors.
+
+Response returns Prometheus metrics text.
+
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+Used by /metrics.
+
+from pydantic import BaseModel, Field
+
+Used to validate request body.
+
+from app import metrics, model_loader
+from app.feature_client import FeastFeatureClient, FEAST_NUMERIC_FEATURE_COLS
+
+These are the important internal relationships:
+
+metrics.py        → Prometheus counters/histograms
+model_loader.py   → loads MLflow Production model
+feature_client.py → uses Feast SDK to fetch online features
+13. Main configuration in main.py
+logger = logging.getLogger(__name__)
+
+Creates logger.
+
+MLFLOW_MODEL_NAME = os.environ.get("MLFLOW_MODEL_NAME", "modelserve_classifier")
+
+Same default model name as train.py.
+
+This is important:
+
+train.py registers modelserve_classifier
+main.py serves modelserve_classifier
+_CAT_DEFAULTS = {"category": "unk", "state": "unk", "gender": "unk"}
+_CAT_ORDER = ("category", "state", "gender")
+
+Why?
+
+Training model was trained with numeric + categorical columns:
+
+numeric: amt, lat, long, ...
+categorical: category, state, gender
+
+But Feast only serves numeric features.
+
+So during inference, main.py provides default categorical values:
+
+category = unk
+state = unk
+gender = unk
+
+Because the model pipeline expects these columns.
+
+_feast_client: FeastFeatureClient | None = None
+_feast_init_error: str | None = None
+
+Global variables:
+
+_feast_client      → initialized Feast client
+_feast_init_error  → stores startup error if Feast failed
+14. FastAPI lifespan startup
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+This runs when FastAPI starts.
+
+model_loader.load_from_registry()
+
+This loads model from MLflow Registry.
+
+Conceptual flow:
+
+main.py
+↓
+model_loader.load_from_registry()
+↓
+MLflow Registry
+↓
+Production modelserve_classifier
+↓
+model stored in memory
+
+This satisfies capstone requirement:
+
+model loads at startup, not per request
+if model_loader.is_ready():
+    metrics.set_served_model(MLFLOW_MODEL_NAME, model_loader.version_string() or "unknown")
+
+If model loaded successfully:
+
+set Prometheus metric with model name/version
+
+This feeds Grafana “served model” panel.
+
+_feast_client = None
+_feast_init_error = None
+
+Reset Feast status.
+
+try:
+    _feast_client = FeastFeatureClient()
+except Exception as exc:
+    _feast_init_error = str(exc)
+
+This initializes Feast SDK client.
+
+Conceptual flow:
+
+main.py
+↓
+FeastFeatureClient()
+↓
+FeatureStore(repo_path)
+↓
+feature_store.yaml
+↓
+Redis online store
+
+If it fails, app still starts, but health shows Feast degraded.
+
+yield
+
+This means application starts serving requests after startup work finishes.
+
+15. Create FastAPI app
+app = FastAPI(
+    title="ModelServe",
+    version="0.2.0",
+    description="MLOps S2 capstone — MLflow + Feast inference",
+    lifespan=lifespan,
+)
+
+This creates API app.
+
+Important:
+
+lifespan=lifespan
+
+means startup process runs automatically.
+
+16. Request schema
+class PredictRequest(BaseModel):
+    entity_id: int = Field(..., description="Feast entity key (cc_num)")
+
+This means /predict expects JSON:
+
+{
+  "entity_id": 3592325941359225
+}
+
+entity_id must be integer.
+
+If missing or wrong type, FastAPI returns validation error.
+
+Also this clearly documents:
+
+entity_id = cc_num
+
+Source:
+
+17. Error helper
+def _error_body(code: str, message: str, status_code: int) -> JSONResponse:
+
+Creates consistent JSON error.
+
+Returns:
+
+{
+  "error": {
+    "code": "...",
+    "message": "..."
+  }
+}
+
+This is why your missing feature response looked like:
+
+{"error":{"code":"missing_features","message":"Missing Feast field for 'amt'"}}
+18. Build model dataframe
+def _build_model_frame(feature_dict: dict[str, float]) -> pd.DataFrame:
+
+This converts Feast result into dataframe for sklearn model.
+
+row: dict[str, Any] = dict(feature_dict)
+
+Copy numeric features from Feast.
+
+Example:
+
+amt
+lat
+long
+city_pop
+merch_lat
+merch_long
+unix_time
+zip
+gender_code
+row.update(_CAT_DEFAULTS)
+
+Adds:
+
+category = unk
+state = unk
+gender = unk
+
+Because model expects these columns.
+
+num_cols = list(FEAST_NUMERIC_FEATURE_COLS)
+ordered = num_cols + list(_CAT_ORDER)
+
+Defines final model input column order:
+
+amt
+lat
+long
+city_pop
+merch_lat
+merch_long
+unix_time
+zip
+gender_code
+category
+state
+gender
+return pd.DataFrame([{c: row[c] for c in ordered}], columns=ordered)
+
+Creates one-row dataframe.
+
+This is what goes into:
+
+model_loader.predict(X)
+19. /health endpoint
+@app.get("/health")
+def health() -> dict[str, Any]:
+
+When you run:
+
+curl http://IP:8000/health
+
+this function runs.
+
+if not model_loader.is_ready():
+
+If MLflow model not loaded:
+
+{
+  "status": "degraded",
+  "model_version": "not_loaded",
+  "detail": "..."
+}
+
+If model is loaded:
+
+out = {
+    "status": "healthy",
+    "model_version": model_loader.version_string(),
+}
+
+Example:
+
+{
+  "status": "healthy",
+  "model_version": "2"
+}
+if _feast_init_error:
+    out["feast"] = "degraded"
+
+If model is OK but Feast failed, health includes Feast warning.
+
+20. /metrics endpoint
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+When Prometheus scrapes:
+
+http://api:8000/metrics
+
+it gets metrics such as:
+
+prediction_requests_total
+prediction_errors_total
+prediction_duration_seconds
+model_version_info
+21. /predict endpoint
+@app.post("/predict")
+def predict(req: PredictRequest) -> dict[str, Any]:
+
+This is main prediction endpoint.
+
+Input:
+
+{"entity_id": 3592325941359225}
+21.1 Count request
+metrics.prediction_requests_total.inc()
+
+Every prediction request increments Prometheus counter.
+
+Grafana request rate uses this.
+
+21.2 Check model loaded
+if not model_loader.is_ready():
+
+If model unavailable:
+
+metrics.prediction_errors_total.labels(reason="model_unavailable").inc()
+
+Then returns:
+
+{
+  "error": {
+    "code": "model_unavailable",
+    "message": "..."
+  }
+}
+
+HTTP status:
+
+503
+21.3 Check Feast client initialized
+if _feast_client is None:
+
+If Feast unavailable:
+
+cannot fetch features
+prediction cannot run
+
+Returns:
+
+{
+  "error": {
+    "code": "feast_unavailable"
+  }
+}
+21.4 Start latency timer
+t0 = time.perf_counter()
+
+This starts measuring prediction duration.
+
+Later:
+
+metrics.prediction_duration_seconds.observe(...)
+21.5 Fetch features from Feast
+feats = _feast_client.get_features(req.entity_id)
+
+This is the most important Feast line in main.py.
+
+Flow:
+
+entity_id
+↓
+FeastFeatureClient.get_features()
+↓
+Feast SDK get_online_features()
+↓
+Redis online store
+↓
+numeric features returned
+
+If feature missing:
+
+except ValueError as exc:
+
+Then:
+
+prediction_errors_total{reason="missing_features"} increases
+latency observed
+returns 404
+
+This is exactly what happened when you changed last digit of entity ID.
+
+21.6 Build dataframe
+X = _build_model_frame(feats)
+
+Converts Feast feature dict to sklearn-compatible dataframe.
+
+21.7 Run model prediction
+y_pred, proba = model_loader.predict(X)
+
+This calls model loaded from MLflow.
+
+Conceptual flow:
+
+X dataframe
+↓
+MLflow-loaded sklearn pipeline
+↓
+preprocessing
+↓
+RandomForestClassifier
+↓
+prediction + probability
+fraud_probability = float(proba[0][1])
+prediction = int(y_pred[0])
+
+proba[0][1] means:
+
+probability of class 1 = fraud
+21.8 Error handling during inference
+except RuntimeError as exc:
+
+If model prediction fails due to known runtime issue, returns:
+
+inference_error
+except Exception as exc:
+
+If unexpected error, logs and returns:
+
+internal_error
+
+This protects the API from crashing.
+
+21.9 Record latency
+metrics.prediction_duration_seconds.observe(time.perf_counter() - t0)
+
+This records how long prediction took.
+
+Grafana latency panels use this metric.
+
+21.10 Return prediction response
+return {
+    "entity_id": int(req.entity_id),
+    "prediction": prediction,
+    "fraud_probability": fraud_probability,
+    "model_name": MLFLOW_MODEL_NAME,
+    "model_version": model_loader.version_string(),
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+}
+
+Example:
+
+{
+  "entity_id": 3592325941359225,
+  "prediction": 0,
+  "fraud_probability": 0.06225745929765291,
+  "model_name": "modelserve_classifier",
+  "model_version": "2",
+  "timestamp": "2026-04-30T09:06:43.175093+00:00"
+}
+
+Source:
+
+22. Relationship between important files
+training/train.py
+
+Creates:
+
+MLflow registered model
+training/model.pkl
+training/features.parquet
+training/sample_request.json
+training/feature_schema.py
+
+Shared schema.
+
+Used by:
+
+train.py
+feast_repo/feature_definitions.py
+app/feature_client.py or main.py
+
+Purpose:
+
+Keep entity/feature names consistent everywhere
+training/features.parquet
+
+Created by:
+
+train.py
+
+Used by:
+
+Feast materialization
+
+Purpose:
+
+offline source for feature values
+training/sample_request.json
+
+Created by:
+
+train.py
+
+Used by:
+
+curl /predict testing
+CI/CD validation
+manual demo
+
+Contains valid entity ID.
+
+feast_repo/feature_definitions.py
+
+Defines:
+
+Entity: cc_num
+FeatureView: fraud_txn_features
+Features: amt, lat, long, ...
+Source: training/features.parquet
+feast_repo/feature_store.yaml
+
+Defines:
+
+Feast project config
+Registry location
+Offline source config
+Online store = Redis
+scripts/materialize_features.py
+
+Runs after training.
+
+Purpose:
+
+take training/features.parquet
+apply Feast logic
+load latest feature values into Redis
+
+Without this:
+
+/predict cannot find features
+app/feature_client.py
+
+Used by:
+
+main.py
+
+Purpose:
+
+wrap Feast SDK
+call get_online_features
+return feature dictionary
+
+It hides Feast details from main.py.
+
+app/model_loader.py
+
+Used by:
+
+main.py
+
+Purpose:
+
+load Production model from MLflow Registry
+keep it in memory
+provide predict() function
+provide model version
+app/metrics.py
+
+Used by:
+
+main.py
+
+Purpose:
+
+define Prometheus metrics
+prediction_requests_total
+prediction_errors_total
+prediction_duration_seconds
+model_version_info
+docker-compose.yml
+
+Runs containers:
+
+postgres
+mlflow
+redis
+api
+
+For your code relationship:
+
+train.py talks to MLflow
+main.py talks to MLflow + Feast
+Feast talks to Redis
+MLflow talks to Postgres
+23. Complete end-to-end flow
+Training time
+1. Download Kaggle fraudTrain.csv
+2. Run python training/train.py
+3. train.py reads fraudTrain.csv
+4. train.py creates model pipeline
+5. train.py trains RandomForestClassifier
+6. train.py logs metrics to MLflow
+7. train.py logs model to MLflow Registry
+8. train.py moves latest model to Production
+9. train.py saves local training/model.pkl
+10. train.py writes training/features.parquet
+11. train.py writes training/sample_request.json
+Feature store preparation time
+1. feast -c feast_repo apply
+2. Feast reads feature_definitions.py
+3. Feast registers cc_num entity
+4. Feast registers fraud_txn_features FeatureView
+5. python scripts/materialize_features.py
+6. Feast reads training/features.parquet
+7. Feast writes online feature values into Redis
+Serving time
+1. FastAPI starts
+2. main.py lifespan runs
+3. model_loader loads Production model from MLflow
+4. main.py initializes FeastFeatureClient
+5. User sends POST /predict with entity_id
+6. main.py asks Feast client for features
+7. Feast SDK reads features from Redis
+8. main.py builds dataframe
+9. model_loader.predict runs MLflow-loaded model
+10. main.py returns prediction JSON
+11. metrics are exposed to Prometheus
+24. Very important conceptual answer
+Does training depend on Feast?
+
+In your current code:
+
+No, training does not read from Feast.
+
+Training creates:
+
+features.parquet
+
+Then Feast uses that later.
+
+So:
+
+train.py → creates Feast input
+Feast → serves features during inference
+Does API depend on Feast?
+
+Yes.
+
+main.py depends on Feast through:
+
+feats = _feast_client.get_features(req.entity_id)
+
+If Feast/Redis does not have that entity ID, prediction fails.
+
+Why no Feast container?
+
+Because Feast is:
+
+Python SDK + CLI
+
+not a long-running service.
+
+The long-running storage backend is:
+
+Redis
+
+So your runtime is:
+
+API container includes Feast library
+Redis container stores online features
+25. Best viva answer
+train.py is responsible for creating the model and feature dataset. It reads fraudTrain.csv, prepares numeric and categorical features, trains a RandomForestClassifier pipeline, logs metrics and the trained pipeline to MLflow, registers the latest model as Production, then exports features.parquet for Feast and sample_request.json for testing.
+
+main.py is the serving layer. On startup, it loads the Production model from MLflow Registry and initializes the Feast client. During /predict, it receives entity_id, uses Feast SDK to fet
