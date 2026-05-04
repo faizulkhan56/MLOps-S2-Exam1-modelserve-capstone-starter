@@ -1,4 +1,4 @@
-# ModelServe
+# ModelServe-new
 
 > **MLOps with Cloud — Season 2, Capstone (Poridhi.io)**
 
