@@ -375,4 +375,102 @@ To change **`prediction`** (0/1) **without** changing the underlying **`fraud_pr
 
 ---
 
+## K. Why Random Forest? Theory, alternatives & classification metrics
+
+### Q: Why did we choose `RandomForestClassifier` for this fraud experiment?
+
+**Short answer:** It is a strong **default for tabular fraud data** in sklearn: handles **numeric + one-hot categoricals** inside our **`Pipeline`**, supports **`class_weight`** for **class imbalance**, outputs **`predict_proba`** (needed for **`fraud_probability`** in the API), is **stable** and **well-supported by MLflow**, and stays within **course complexity** (no extra ML libraries required).
+
+**Expanded — reasons that match *this* codebase:**
+
+| Reason | Detail |
+|--------|--------|
+| **Tabular fraud** | Transaction features (amount, geo, time, merchant coords, etc.) are **structured columns** — tree ensembles are a standard first-line approach before deep models. |
+| **Mixed preprocessing** | [`training/train.py`](../training/train.py) uses **`ColumnTransformer`**: scaled numerics + **one-hot** categoricals. **Tree models do not assume linearity**; they split on thresholds and combine many splits to approximate non-linear boundaries. |
+| **Imbalance** | Fraud is **rare**; `RandomForestClassifier(..., class_weight="balanced", ...)` **reweights** samples so the forest pays more attention to the minority class — a simple, explicit lever in code. |
+| **Probabilities** | Random forests average **leaf class proportions** across trees → **`predict_proba`** is well-defined; the API exposes **`fraud_probability`** from **`proba[0][1]`** ([`app/main.py`](../app/main.py)). |
+| **Robustness** | **Bagging** (many trees on bootstrap samples) **reduces variance** compared to a single **DecisionTree**, which overfits easily. |
+| **Scope** | One **`sklearn.ensemble`** import, easy **`mlflow.sklearn.log_model`**, no GPU or separate boosting install — good for a **reproducible MLOps** story (train → register → serve). |
+
+**Honest caveat for viva:** Random Forest is **not guaranteed** to be the best model on this dataset; it is a **sensible baseline**. You can say you would **compare** against **gradient boosting** (XGBoost / LightGBM / CatBoost) in a real project.
+
+---
+
+### Q: How does Random Forest work (brief theory)?
+
+**Short answer:** An **ensemble** of many **decision trees**, each trained on a **bootstrap sample** of rows and using **random subsets of features** at each split; classification **predictions** are **majority vote**, **probabilities** are **averaged tree probabilities**.
+
+**Expanded:**
+
+1. **Decision tree base learner:** Each tree recursively splits data on feature thresholds to minimize impurity (e.g. **Gini**). A single tree can **memorize** noise → **high variance**.
+
+2. **Bagging (Bootstrap AGGregatING):** Train tree \(b\) on a random sample **with replacement** of size \(n\). Repeat for \(B\) trees. **Averaging** predictions reduces variance — the core **Random Forest** idea (Breiman).
+
+3. **Random feature subsets:** At each split, only **`max_features`** (or sqrt of \(p\) by default in sklearn for classification) of the **\(p\)** inputs are considered. That **decorrelates** trees so bagging works better.
+
+4. **Output:** For binary fraud, each leaf has a **fraction** of positive examples; the forest **averages** those fractions → **`predict_proba`**.
+
+5. **Typical strengths:** Good **off-the-shelf** performance on mixed tabular data; **non-linear** interactions; relatively **few critical hyperparameters** compared to neural nets.
+
+6. **Typical weaknesses:** **Slower** inference than linear models if **`n_estimators`** is huge; **memory** for many trees; **less interpretable** globally than one logistic regression (though **feature importances** exist); **high-cardinality** one-hot can make trees expensive — we cap categories (**`max_categories=20`**) in training.
+
+---
+
+### Q: Why not another model class here? (When would others fit or not?)
+
+**Short answer:** Other models **could** fit — the choice is **engineering + pedagogy**, not a proof that RF is optimal. Below is how examiners expect you to argue trade-offs.
+
+| Model family | Why it *could* work | Why we did **not** pick it as the default *here* |
+|--------------|---------------------|-----------------------------------------------|
+| **Logistic regression** | Fast, **calibrated**-ish scores with **`CalibratedClassifierCV`**, very interpretable **coefficients**. | **Linear** decision surface in **transformed** feature space; fraud boundaries are often **non-linear**; may need **heavy feature engineering** to match tree ensembles. |
+| **Gradient boosting** (XGBoost / LightGBM / CatBoost) | Often **state-of-the-art** on **tabular** competitions; strong with defaults + tuning. | **Extra dependency** and tuning surface; course stack emphasizes **sklearn + MLflow**; valid viva answer: *“We’d add boosting as the next experiment.”* |
+| **Support Vector Machine** | Worked well in older medium-sized tabular tasks. | **Poor scaling** to large \(n\); **no natural `predict_proba`** unless Platt-style calibration; usually **not** first choice for large fraud CSVs. |
+| **Neural networks** | Can learn arbitrary functions. | Tabular fraud often does **not** need them; need **more tuning**, data volume, and infra; **harder to explain** in a capstone viva. |
+| **Naive Bayes** | Very fast baseline. | Strong **independence** assumptions rarely hold for transaction features. |
+| **KNN** | Simple. | **Inference cost** grows with data; **feature scaling** sensitive; weak default for this use case. |
+
+**One sentence for oral exam:** *We used **RandomForestClassifier** as a **strong sklearn baseline** with **class weights** and **probabilities**; **boosting** would be the next step if metrics plateau.*
+
+---
+
+### Q: Explain the metrics logged in `train.py` — accuracy, precision, recall, F1, ROC-AUC
+
+Metrics are computed on the **held-out test split** and logged to MLflow in [`training/train.py`](../training/train.py) (~lines 207–216). **Binary positive class = fraud (`is_fraud` = 1).**
+
+| Metric | Formula / meaning (binary fraud) | Why it matters here |
+|--------|-----------------------------------|---------------------|
+| **Accuracy** | \(\frac{TP + TN}{TP + TN + FP + FN}\) — fraction of **correct** predictions. | Easy to read but **misleading** when fraud is **rare**: predicting “all legitimate” can yield **high accuracy** and **zero recall** on fraud. **Never** cite accuracy alone for fraud. |
+| **Precision** | \(\frac{TP}{TP + FP}\) — of transactions **flagged** fraud, how many **actually** fraud. | **Cost of false alarms**: blocks, reviews, customer friction. Low precision → too many **false positives**. |
+| **Recall** | \(\frac{TP}{TP + FN}\) — of **real** fraud cases, how many we **catch**. | **Cost of missed fraud**: financial loss, regulatory exposure. Low recall → **false negatives**. |
+| **F1** | Harmonic mean of precision and recall: \(2 \cdot \frac{precision \cdot recall}{precision + recall}\). | Single **balance** when you care about **both** FP and FN trade-offs; useful for **comparing runs** with one number (still not a substitute for domain cost weights). |
+| **ROC-AUC** | Area under **ROC curve**: **TP rate vs FP rate** as **threshold** varies on **`predict_proba`**. | Measures **ranking** ability — does the model **score** fraud higher than non-fraud on average? Logged only when both **`y_test`** and **`pred`** contain **both classes** and enough variation (see `if len(np.unique(y_test)) > 1 and len(np.unique(pred)) > 1` in code); otherwise **ROC-AUC is skipped** (undefined or degenerate). |
+
+**Confusion matrix vocabulary (quick):** **TP** = fraud predicted fraud; **TN** = legit predicted legit; **FP** = legit flagged fraud; **FN** = fraud missed.
+
+**What we do *not* log (but you can mention):** **PR-AUC** (precision–recall curve area) is often **better than ROC-AUC** under **heavy imbalance** because it focuses on the **minority class**. Adding it would be a small extension to `train.py`.
+
+---
+
+### Q: What tuning moves improve these metrics in practice?
+
+**Short answer:** Improve **data** and **model capacity / regularization**, then tune **threshold** on validation data using **business costs** — not only accuracy.
+
+**Concrete levers (overlap with §J):**
+
+1. **Hyperparameters** ([`training/train.py`](../training/train.py) `RandomForestClassifier`): increase **`n_estimators`** (often smoother scores), tune **`max_depth`** / **`min_samples_leaf`** (**variance vs bias**), try **`max_features`** at each split, experiment with **`class_weight`** or manual `{0: w0, 1: w1}` matching **FN vs FP** cost.
+
+2. **More / cleaner data:** env **`TRAIN_MAX_ROWS`** — using **full** Kaggle file usually helps generalization vs a tiny slice.
+
+3. **Preprocessing:** `OneHotEncoder(max_categories=20)` trades **rarity tail** vs noise; imputer **`median`** vs **`mean`** can shift metrics slightly.
+
+4. **Threshold / operating point:** Default sklearn **`predict()`** uses **0.5** on probability — often **suboptimal** for fraud. On a **validation** set, sweep thresholds and plot **precision vs recall**; pick the point your **business** accepts (e.g. minimum recall with precision floor).
+
+5. **Calibration:** If **`fraud_probability`** must align with **true frequencies**, consider **`CalibratedClassifierCV`** wrapping the pipeline or **Platt** scaling — improves **interpretability** of **proba**, not always raw ranking.
+
+6. **Alternative algorithms:** If RF plateaus, **LightGBM/XGBoost** with early stopping and **`scale_pos_weight`** (or sample weights) is a common **next step**.
+
+**Viva one-liner:** *Random Forest gives a **probabilistic**, **imbalance-aware** baseline on **tabular** fraud; we log **precision/recall/F1** and **ROC-AUC** because **accuracy lies** on rare events; **boosting** and **threshold tuning** are the usual upgrades.*
+
+---
+
 For live demo flow, see [`demo-guide.md`](demo-guide.md). For screenshots and submission expectations, see [`submission-checklist.md`](submission-checklist.md).
