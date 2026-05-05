@@ -473,4 +473,124 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 ---
 
+## L. Train/test split ratio & model fit (overfitting / underfitting)
+
+### Q: In what ratio do we split train vs test — is it the “most efficient”?
+
+**Short answer:** [`training/train.py`](../training/train.py) uses **`train_test_split(..., test_size=0.2, stratify=y, random_state=RANDOM_STATE)`** → **80% train / 20% test**. That is a **common default**, **not** a universal optimum; “efficiency” depends on **dataset size**, **class balance**, and whether you need **cross-validation** instead of a single split.
+
+**Expanded:**
+
+| Aspect | What this repo does | Why it matters |
+|--------|---------------------|----------------|
+| **Ratio** | **0.2** test → **80 / 20** | Enough held-out rows for a **stable** estimate of metrics when the Kaggle file is **large**; old rule-of-thumb is **70/30** or **80/20** for single splits. |
+| **Stratification** | **`stratify=y`** | Keeps **fraud vs non-fraud** proportions **similar** in train and test — critical for **imbalanced** fraud data so the test set still contains **enough** minority-class examples to measure **recall/precision** meaningfully. |
+| **Random seed** | **`random_state=42`** | **Reproducible** splits across runs / laptops / CI. |
+
+**Is 80/20 the “best”?**
+
+- **No single ratio is always best.** With **millions** of rows, **90/10** or **95/5** can still yield a **huge** test set — you might **train on more** data. With **very few** rows (or rare fraud), **20%** test might leave **too few** fraud cases in `y_test` → **noisy** precision/recall — then **k-fold cross-validation** or **stratified K-fold** is better than obsessing over 80/20.
+- **Efficiency** in ML usually means **generalization error**, not CPU time: you want a split (or CV) that **estimates production performance** without **using the test set for tuning** (otherwise you **leak** information — treat test as **once** for final reporting, or use a **validation** split inside train for hyperparameter search).
+
+**Viva phrase:** *We use **80/20 stratified** as a **standard, reproducible** holdout; for smaller or messier data we’d switch to **stratified K-fold** or add a **validation** fold for tuning.*
+
+---
+
+### Q: What are overfitting and underfitting? Related ideas for the oral exam
+
+**Short answer:** **Underfitting** = model too **simple** → poor fit on **both** train and test (**high bias**). **Overfitting** = model too **complex** or too **tuned to noise** → great on **train**, worse on **test** (**high variance**). The goal is **good generalization**: similar quality on **unseen** data.
+
+**Definitions (examiner-friendly):**
+
+| Concept | Symptom | Typical cause | Fraud angle |
+|---------|---------|----------------|-------------|
+| **Underfitting** | **Train** metrics **and** **test** metrics both **low**; predictions look **random** or always majority class. | Model **capacity** too low (e.g. very shallow tree, heavy regularization), **wrong features**, or **bad preprocessing**. | Always predicting **non-fraud** → **high “accuracy”** but **zero recall** on fraud — looks OK until you read **recall**. |
+| **Overfitting** | **Train** metrics **much better** than **test**; large **gap**. | **Too many parameters** / deep trees, **too few samples**, **memorizing** noise, or **tuning hyperparameters using the test set** (cheating the metric). | Model **fits quirks** of training merchants/cards; **fails** on new cards — **precision/recall** drop on holdout. |
+| **Bias–variance tradeoff** | **Bias** = systematic error (wrong assumptions); **variance** = sensitivity to training sample draw. | Often shown as **U-shaped** total error: simple models **bias↑**, complex models **variance↑**. | Random Forest **averages trees** to **reduce variance** vs one tree; still can overfit if **`max_depth`** unbounded and **`n`** small. |
+| **Generalization** | Performance on **new** data from the **same distribution** as training. | Good generalization = train and test metrics **aligned** (small gap). | Production traffic **drifts** → generalization gets worse even without “overfitting” in the classical sense (**concept drift**). |
+
+**Signs in MLflow / `train.py`:** Compare logged **test** metrics across runs. If you logged **train** metrics too (not in this script by default), a **big train–test gap** hints at **overfitting**. If **both** are bad → **underfitting** or **data/label** issues.
+
+**Related terms (quick):**
+
+- **Validation set:** subset used to **tune** hyperparameters — **not** the final test set.
+- **Cross-validation:** multiple train/validation folds → **lower variance** estimate of performance than one 80/20 split.
+- **Regularization:** constraints that **reduce overfitting** (here: **`max_depth`**, **`min_samples_leaf`**, **`max_features`** in Random Forest; fewer/smaller trees).
+
+**Viva one-liner:** ***Underfitting*** *bad everywhere; **overfitting** great on train, worse on test — we hold out **20% stratified** to see **generalization**, and we’d use **CV** if the dataset were smaller or noisier.*
+
+*Systematic **hyperparameter search** (GridSearchCV, which knobs to turn, and how that fights over/underfitting in this repo) is in **§M** below.*
+
+---
+
+## M. Hyperparameter tuning in ModelServe, overfitting/underfitting & what to do in the lab
+
+### Q: What is hyperparameter tuning, and do we do it automatically in this repo?
+
+**Short answer:** **Hyperparameters** are settings chosen **before** training (**tree depth**, **`n_estimators`**, **`max_features`**, imputer strategy, etc.). **Learned parameters** are **weights / splits** fitted from data. This repo uses **fixed** hyperparameters in [`training/train.py`](../training/train.py) (`RandomForestClassifier(n_estimators=100, max_depth=20, …)` — ~lines 187–194) — there is **no** built-in **`GridSearchCV`**, **`RandomizedSearchCV`**, or **Optuna** loop. “Tuning” today means **you edit numbers** and **re-run** `train.py`, then compare metrics in **MLflow**.
+
+**Expanded — why automate tuning (conceptually):**
+
+- Manual trial-and-error works for a capstone, but **systematic search** explores combinations and reduces **lucky** single runs.
+- The **objective** is usually a **validation** metric (e.g. **F1**, **ROC-AUC**) that reflects **business** goals — **not** training loss alone.
+
+---
+
+### Q: Which objects in our pipeline *are* hyperparameters (for viva + for tuning)?
+
+Everything below is **not learned by gradient descent**; sklearn treats these as **constructor arguments** to **`Pipeline`** / **`RandomForestClassifier`** / **`ColumnTransformer`** children:
+
+| Layer | Examples in this lab | Notes |
+|-------|----------------------|--------|
+| **Random forest** | `n_estimators`, `max_depth`, `min_samples_leaf`, `max_features`, `min_samples_split`, `class_weight`, `random_state` | Main **capacity vs regularization** levers (see table below). |
+| **Preprocessing** | `SimpleImputer(strategy="median")`, `OneHotEncoder(max_categories=20)` | Affect **input** to trees; can be included in a search **inside** the same `Pipeline` (prefix params with `prep__` / `clf__`). |
+| **Data / split (pseudo-hyperparameters)** | `test_size=0.2`, **`TRAIN_MAX_ROWS`**, `random_state` | Not model params but **change generalization** estimates. |
+
+**Current defaults (memory aid):** `n_estimators=100`, `max_depth=20`, `min_samples_leaf=2`, `class_weight="balanced"`.
+
+---
+
+### Q: How would we *introduce* hyperparameter tuning in this lab (correct workflow)?
+
+**Short answer:** Never tune on **`X_test`**. Either (**A**) **`StratifiedKFold`** cross-validation on **`X_train` only**, or (**B**) split **`X_train`** → **`X_tr` / `X_val`**, search on **`X_tr`**, pick best params, **final fit** on full **`X_train`**, then **one** evaluation on **`X_test`** for reporting. Log **best params** and **metrics** to **MLflow**.
+
+**Concrete sklearn pattern (conceptual — not in repo yet):**
+
+1. Build the same **`Pipeline([("prep", pre), ("clf", RandomForestClassifier(...))])`** as today.
+2. Define **`param_grid`** or **`param_distributions`**, e.g. `clf__max_depth`: [10, 20, None], `clf__min_samples_leaf`: [1, 2, 5], `clf__n_estimators`: [100, 200].
+3. Wrap with **`GridSearchCV(pipeline, param_grid, cv=StratifiedKFold(5), scoring="roc_auc" or "f1", n_jobs=-1)`** fit on **`X_train, y_train`** only.
+4. Take **`search.best_estimator_`**, evaluate on **`X_test`** once, **`mlflow.log_params(search.best_params_)`**, **`mlflow.sklearn.log_model(search.best_estimator_, ...)`**.
+
+**Why scoring matters for fraud:** Prefer **`f1`**, **`precision`**, **`recall`**, or **`roc_auc`** over **`accuracy`** (see §K). Use **`scoring=`** that matches the **examiner / business** question.
+
+**MLflow angle:** Each search can be **one parent run** with **child runs** per CV fold if you use **`mlflow.sklearn.autolog()`** — optional polish.
+
+---
+
+### Q: Hyperparameter tuning vs overfitting / underfitting — how do we reduce each *in this lab*?
+
+**Concept link:** **Tuning** searches hyperparameters that control **model complexity** and **regularization**. **Overfitting** ≈ **too complex** for the data; **underfitting** ≈ **too simple** or **wrong setup**.
+
+| Problem | What you see | Hyperparameters / actions **in ModelServe** that typically **help** |
+|---------|----------------|----------------------------------------------------------------------|
+| **Overfitting** | Train metrics **much better** than test; unstable trees. | **Lower** `max_depth`; **raise** `min_samples_leaf` / `min_samples_split`; **lower** `max_features` (more randomness per split); **fewer** trees only helps slightly — focus on **depth/leaf** first; **more training data** (`TRAIN_MAX_ROWS` unset = full file); **stratified CV** so you don’t pick params that **lucky-fit** one split. |
+| **Underfitting** | **Both** train and test metrics **low**; model barely beats baseline. | **Higher** `max_depth` (until overfit); **more** `n_estimators`; **relax** `min_samples_leaf` (careful — can overfit); richer **features** (schema + Feast — avoid skew); check **`class_weight`** and **imbalance** handling. |
+| **Metric misleading** | Great test number after **many** manual tweaks using the **same** test set. | **Data leakage:** tune only with **CV on train** or a **validation** set; keep **`X_test`** **untouched** until final comparison — same rule if you add Optuna. |
+
+**Preprocessing levers (same file):** **`OneHotEncoder(max_categories=20)`** — lowering categories can **regularize** (less sparse noise); raising can **underfit** if signal was in dropped tails.
+
+**Operational reminder:** After any winning **`Pipeline`**, still **re-export** **`features.parquet`**, **`feast apply`**, **materialize**, **restart API** if features or preprocessing changed (§J Plan 3).
+
+---
+
+### Q: *(Extra)* Grid search vs randomized search vs Bayesian optimization?
+
+**Answer:** **GridSearchCV** — exhaustive over a **small** grid; expensive when many params. **RandomizedSearchCV** — sample **N** combinations; good for **wide** ranges. **Optuna / Hyperopt** — **sequential** learning of promising regions; best when each train is **costly**. For this lab’s dataset size, **5-fold stratified CV + modest grid or random search** on `RandomForestClassifier` is already a **strong viva story**.
+
+---
+
+**Viva one-liner:** *Hyperparameters are the **knobs** on `RandomForestClassifier` and preprocessing; this repo **fixes** them — real tuning uses **CV on train** and **`GridSearchCV`/`RandomizedSearchCV`**, logs **`best_params_`** to MLflow, then evaluates **once** on the held-out **20%**; **shallow trees / larger leaves** fight **overfitting**, **deeper / more trees** can fix **underfitting** until the gap widens.*
+
+---
+
 For live demo flow, see [`demo-guide.md`](demo-guide.md). For screenshots and submission expectations, see [`submission-checklist.md`](submission-checklist.md).
