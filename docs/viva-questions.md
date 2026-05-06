@@ -2,7 +2,7 @@
 
 **Questions, expanded answers, and extra “unseen” prompts** for the ModelServe capstone. Adapt examples to what you actually ran (local VM vs EC2, times, run IDs).
 
-**Related:** [`demo-guide.md`](demo-guide.md), [`submission-checklist.md`](submission-checklist.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`explanation-linewise.md`](../explanation-linewise.md).
+**Related:** [`demo-guide.md`](demo-guide.md), [`submission-checklist.md`](submission-checklist.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`explanation-linewise.md`](../explanation-linewise.md). **Broader metric reference (regression + classification):** [§N](#n-universal-model-performance-metrics-reference).
 
 ---
 
@@ -449,6 +449,8 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 **What we do *not* log (but you can mention):** **PR-AUC** (precision–recall curve area) is often **better than ROC-AUC** under **heavy imbalance** because it focuses on the **minority class**. Adding it would be a small extension to `train.py`.
 
+**Regression metrics** (**MSE**, **RMSE**, **MAE**, **R²**, **adjusted R²**, etc.) apply to **continuous targets** — not this fraud **binary classification** problem — but examiners often ask for them anyway; see **[§N](#n-universal-model-performance-metrics-reference)** for a compact reference.
+
 ---
 
 ### Q: What tuning moves improve these metrics in practice?
@@ -670,6 +672,69 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 ---
 
 **Viva one-liner:** *Hyperparameters are the **knobs** on `RandomForestClassifier` and preprocessing; this repo **fixes** them — real tuning uses **CV on train** and **`GridSearchCV`/`RandomizedSearchCV`**, logs **`best_params_`** to MLflow, then evaluates **once** on the held-out **20%**; **shallow trees / larger leaves** fight **overfitting**, **deeper / more trees** can fix **underfitting** until the gap widens.*
+
+---
+
+## N. Universal model performance metrics (reference)
+
+### Q: What does ModelServe log today vs what other metrics are common in ML?
+
+**ModelServe (this project)** logs **classification** metrics on a **held-out test split**: **accuracy**, **precision**, **recall**, **F1**, and **ROC-AUC** when defined ([`training/train.py`](../training/train.py) — see **§K** for fraud-specific interpretation). The sections below are a **general viva cheat sheet** for **regression**, **extra classification metrics**, and a few **other** standard measures — useful when examiners ask *“what else would you use?”*
+
+---
+
+### Regression (continuous target \(y\), prediction \(\hat{y}\))
+
+Assume \(n\) samples, errors \(e_i = y_i - \hat{y}_i\).
+
+| Metric | Formula / definition | Interpretation | Notes |
+|--------|----------------------|----------------|-------|
+| **MSE** (mean squared error) | \(\frac{1}{n}\sum_i (y_i - \hat{y}_i)^2\) | **Penalizes large errors** heavily (squares). | Same units as \(y^2\); sensitive to **outliers**. |
+| **RMSE** | \(\sqrt{\text{MSE}}\) | Same **scale as \(y\)** — easier to explain to stakeholders. | Still **outlier-sensitive**; compare to naive baselines (mean predictor). |
+| **MAE** | \(\frac{1}{n}\sum_i \|y_i - \hat{y}_i\|\) | **Average absolute** error; **robust** vs MSE. | All errors weighted **linearly** — less dominated by single huge misses. |
+| **Median absolute error** | \(\text{median}_i(\|y_i - \hat{y}_i\|)\) | **Very robust** to outliers. | sklearn: `median_absolute_error`. |
+| **\(R^2\)** (coefficient of determination) | \(1 - \frac{\sum_i (y_i-\hat{y}_i)^2}{\sum_i (y_i-\bar{y})^2}\) | Share of **variance explained** (vs predicting **mean** \(\bar{y}\)). | **1** = perfect on train sample; can go **negative** on test if model is worse than mean. **Not** “accuracy %”. |
+| **Adjusted \(R^2\)** | \(1 - (1-R^2)\frac{n-1}{n-p-1}\) (linear models with **\(p\)** features) | **Penalty** for **extra predictors** — goes **down** if new features don’t help enough. | Mainly for **linear regression** variable selection narrative; tree models use other feature-importance tools. |
+| **MAPE** | \(\frac{100\%}{n}\sum_i \left\| \frac{y_i-\hat{y}_i}{y_i} \right\|\) | **Relative** error — “off by 5% on average”. | **Breaks** if any \(y_i=0\); asymmetric; use **sMAPE** or **masked** MAPE if needed. |
+| **MSLE** / **RMSLE** | Mean squared **log** error (and root) | Emphasizes **relative** scale; good when **multiplicative** errors matter (prices, counts). | Requires **positive** targets for log. |
+
+**When examiners ask:** *MSE vs MAE* — MSE for **quadratic loss** (penalize big misses); MAE for **L1** / robust reporting. *RMSE* is the **default** “same units as target” scalar.
+
+---
+
+### Classification (binary & multi-class; beyond §K)
+
+| Metric | Idea | When it shines |
+|--------|------|----------------|
+| **Accuracy** | Correct / all. | **Balanced** classes only; misleading under **imbalance** (fraud, churn). |
+| **Precision / Recall / F1** | See **§K**. | Imbalanced **binary**; **F1** balances both. |
+| **Specificity** | TN / (TN + FP) = **true negative rate**. | Medical / security “**don’t false alarm**” alongside recall. |
+| **Balanced accuracy** | \(\frac{1}{2}(\text{TPR} + \text{TNR})\) | **Average** per-class recall — better than raw accuracy when **classes differ** in size. |
+| **ROC-AUC** | Area under **TPR vs FPR** curve. | **Ranking** quality; **threshold-free** summary; can be **optimistic** under strong imbalance. |
+| **PR-AUC** (**average precision**) | Area under **precision–recall** curve. | Often **preferred** for **rare positives** (fraud) — focuses on **minority** performance. |
+| **Log loss** (cross-entropy) | \(-\frac{1}{n}\sum_i \log p_{i,y_i}\) | **Probabilistic** quality — penalizes **confident wrong** predictions. | Needs **calibrated** probabilities for fair comparison. |
+| **Brier score** | Mean squared error of **predicted probabilities** vs 0/1 labels. | **Calibration + sharpness** for **binary** probabilistic classifiers. |
+| **Matthews correlation (MCC)** | Correlation between predicted and true ±1 | **Single** number in \([-1,1]\); **balanced** use of all confusion-matrix cells — good for **imbalance**. |
+| **Cohen’s \(\kappa\)** | Agreement vs **chance**. | **Ordinal** or **categorical** agreement; accounts for **base rate**. |
+
+**Multi-class extensions:** **Macro** F1 = average F1 **per class** (treats classes equally); **Micro** F1 = global TP/FP/FN (behaves like **accuracy** on multiclass); **Weighted** F1 = average weighted by **support**.
+
+---
+
+### Other common settings (short)
+
+| Setting | Examples | Notes |
+|---------|-----------|--------|
+| **Ranking / retrieval** | **NDCG**, **MAP**, **MRR** | Search, recommendations — **order** matters, not just point predictions. |
+| **Clustering** (no labels) | **Silhouette**, **inertia** (k-means), **Davies–Bouldin** | Internal **cohesion/separation**; **ARI** / **NMI** if **ground-truth** clusters exist. |
+| **Survival / time-to-event** | **C-index** (concordance) | Not used in ModelServe. |
+| **Forecasting** | **MASE**, **sMAPE** | Time series — **scale-free** errors. |
+
+---
+
+### Q: *(Extra)* One sentence — how do I pick a metric?
+
+**Answer:** Match the **loss** to **business cost**: **false negatives vs false positives** (classification), **big errors vs typical errors** (MSE vs MAE), **rare events** (PR-AUC / recall), **probabilities** (log loss, Brier), **explained variance** (R²) only with awareness of **non-linear** models and **out-of-sample** behavior.
 
 ---
 
