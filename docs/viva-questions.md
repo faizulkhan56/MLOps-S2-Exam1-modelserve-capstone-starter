@@ -546,7 +546,33 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 | **Preprocessing** | `SimpleImputer(strategy="median")`, `OneHotEncoder(max_categories=20)` | Affect **input** to trees; can be included in a search **inside** the same `Pipeline` (prefix params with `prep__` / `clf__`). |
 | **Data / split (pseudo-hyperparameters)** | `test_size=0.2`, **`TRAIN_MAX_ROWS`**, `random_state` | Not model params but **change generalization** estimates. |
 
-**Current defaults (memory aid):** `n_estimators=100`, `max_depth=20`, `min_samples_leaf=2`, `class_weight="balanced"`.
+**Current defaults (memory aid):** `n_estimators=100`, `max_depth=20`, `min_samples_leaf=2`, `class_weight="balanced"`. **`max_features`** is **not passed** → sklearn uses its **classification default** (`"sqrt"` of the number of features at each split).
+
+---
+
+### Q: What is the logic behind our chosen **numbers** for the forest and preprocessing?
+
+**Short answer:** They are **practical teaching defaults**: good baseline quality on tabular fraud, **reasonable train time** on a VM, and **explicit regularization** (depth cap, leaf size, balanced classes, capped one-hot). They are **not** proven optimal until you run **CV** or search.
+
+**Defined in:** [`training/train.py`](../training/train.py) (~165–194).
+
+| Setting | Value | What it does | Logic / trade-off |
+|---------|--------|--------------|-------------------|
+| **`n_estimators`** | **100** | Number of trees; forest output = **vote** or **average** of tree probabilities. | More trees **smooth** predictions (**lower variance**) but cost **~linear** time. **100** matches common sklearn examples: strong enough before **diminishing returns**; **200–500** is a typical next step if CV gains. |
+| **`max_depth`** | **20** | Maximum **depth** of each tree (longest root→leaf path). | **Unbounded** (`None`) can **overfit** noise. **20** limits how “jagged” the decision surface can get — **enough** depth for interaction effects, **not** infinite memorization. |
+| **`min_samples_leaf`** | **2** | Minimum **training samples** required in a leaf (splitting stops if it would violate this). | **`1`** allows **singleton** leaves → classic overfit. **`2`** is a **minimal** regularization bump; **`5–20`** would **smooth** more if CV shows overfit. |
+| **`class_weight`** | **`"balanced"`** | Weights classes **inversely** to frequency in `y` when building trees. | Fraud is **rare**; without this, trees optimize **overall error** by favoring the majority. **`balanced`** is the standard sklearn fix; **`balanced_subsample`** reweights **per bootstrap** sample. |
+| **`max_features`** | **Default** (`"sqrt"` of *p*) | At **each split**, only a **random subset** of input columns is candidates. | This **decorrelates** trees (core RF idea). We **don’t hard-code** it; tuning could try **`"log2"`**, **`0.3`**, or **`None`** (all features every split — often **more correlated** trees). |
+
+**`SimpleImputer(strategy="median")`**
+
+- Fills **missing** numerics with the **per-column median** learned on the **training** portion of each CV fold (when the imputer lives inside **`Pipeline`**, there is **no leakage** from validation rows).
+- **Median vs mean:** Transaction amounts and similar fields are **skewed**; outliers **move the mean** more than the **median** → median imputation is **robust** and a standard choice for financial-ish numerics.
+
+**`OneHotEncoder(..., max_categories=20)`**
+
+- **One-hot** encodes categoricals but **limits** how many distinct column levels are kept separately; **tail** categories are grouped (**infrequent** bucket in sklearn).
+- **Why 20:** Stops **exploding** dimensionality on high-cardinality columns and reduces **noise splits** on ultra-rare categories — acts as **implicit regularization**. **Cost:** fraud signal tied to **rare** merchants may be **collapsed**; raising the cap is justified only if **validation** says it helps.
 
 ---
 
@@ -554,16 +580,47 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 **Short answer:** Never tune on **`X_test`**. Either (**A**) **`StratifiedKFold`** cross-validation on **`X_train` only**, or (**B**) split **`X_train`** → **`X_tr` / `X_val`**, search on **`X_tr`**, pick best params, **final fit** on full **`X_train`**, then **one** evaluation on **`X_test`** for reporting. Log **best params** and **metrics** to **MLflow**.
 
-**Concrete sklearn pattern (conceptual — not in repo yet):**
+#### Why we must not tune on `X_test`
 
-1. Build the same **`Pipeline([("prep", pre), ("clf", RandomForestClassifier(...))])`** as today.
-2. Define **`param_grid`** or **`param_distributions`**, e.g. `clf__max_depth`: [10, 20, None], `clf__min_samples_leaf`: [1, 2, 5], `clf__n_estimators`: [100, 200].
-3. Wrap with **`GridSearchCV(pipeline, param_grid, cv=StratifiedKFold(5), scoring="roc_auc" or "f1", n_jobs=-1)`** fit on **`X_train, y_train`** only.
-4. Take **`search.best_estimator_`**, evaluate on **`X_test`** once, **`mlflow.log_params(search.best_params_)`**, **`mlflow.sklearn.log_model(search.best_estimator_, ...)`**.
+- **`X_test`** simulates **unseen** production data. If we **choose** hyperparameters because they **maximize test metrics**, those numbers are **optimistically biased** — we have **overfit the test set** (**selection leakage**). Correct story: **tune** with **train (+ CV or val)** only; **report** test **once** (or rarely) as **final** generalization.
 
-**Why scoring matters for fraud:** Prefer **`f1`**, **`precision`**, **`recall`**, or **`roc_auc`** over **`accuracy`** (see §K). Use **`scoring=`** that matches the **examiner / business** question.
+#### Path (A): `StratifiedKFold` on `X_train` only
 
-**MLflow angle:** Each search can be **one parent run** with **child runs** per CV fold if you use **`mlflow.sklearn.autolog()`** — optional polish.
+1. Keep the existing split: **`train_test_split(..., test_size=0.2, stratify=y)`** → **`X_train`, `X_test`**.
+2. **`GridSearchCV(..., cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42))`** repeatedly **re-partitions** **`X_train`** into 5 parts: train on **4**, score on **1**, rotate. Every training row is used **4** times for training and **1** time as **validation**.
+3. **`StratifiedKFold`** preserves **fraud proportion** in each fold — critical when positives are **rare**.
+4. **`search.fit(X_train, y_train)`** selects **`best_params_`** maximizing **`scoring`** (e.g. **`roc_auc`**) **averaged** across folds.
+5. With **`refit=True`** (default), **`search.best_estimator_`** **re-fits** the **full** **`Pipeline`** on **all** **`X_train`** using **`best_params_`** — that is the model you **log** and optionally **register**.
+6. **Then** compute test metrics **once** from **`search.best_estimator_.predict`** / **`predict_proba`** on **`X_test`**.
+
+#### Path (B): nested train / validation / test
+
+1. **`X_train`** → second split **`X_tr`, `X_val`** (stratified).
+2. Search hyperparameters using **`X_tr`** only, **select** on **`X_val`**.
+3. **Refit** on **`X_train`** (concatenate tr+val) with the winner.
+4. **Final** readout on **`X_test`**.
+
+#### Concrete sklearn steps (still **conceptual** — not committed in repo)
+
+1. Instantiate **`Pipeline([("prep", pre), ("clf", RandomForestClassifier(random_state=42))])`** (avoid fixing every `clf` knob in the constructor if the grid will override them).
+2. **`param_grid`**: e.g. `{"clf__max_depth": [10, 20, None], "clf__min_samples_leaf": [1, 2, 5], "clf__n_estimators": [100, 200]}` — keys use **`step__param`** syntax.
+3. **`search = GridSearchCV(pipeline, param_grid, cv=StratifiedKFold(5, shuffle=True, random_state=42), scoring="roc_auc", n_jobs=-1, refit=True)`** then **`search.fit(X_train, y_train)`**.
+4. **MLflow:** `mlflow.log_params(search.best_params_)`, log **`search.best_score_`** (CV mean), then compute test metrics and **`mlflow.sklearn.log_model(search.best_estimator_, ...)`** inside the same run as today’s script.
+
+#### Why **`scoring=`** for fraud
+
+- **`accuracy`** rewards **“always legit”** on imbalanced data. Prefer **`roc_auc`**, **`f1`**, **`average_precision`**, or a **custom** scorer (e.g. **`recall`** if false negatives are unacceptable). Align the scorer with the **business** story (§K).
+
+#### Integrating this into the **ModelServe** lab — practical effects
+
+| Area | What changes |
+|------|----------------|
+| **Wall time** | Each hyperparameter **combination** × **5 folds** = **many** full pipeline fits; expect **longer** runs than a single `train.py`. |
+| **MLflow** | Richer **param** and **metric** history; easy to show **“baseline vs tuned”** in the UI. |
+| **Feast / API** | If search only touches **`clf__`**, **Parquet columns** unchanged → **no** Feast schema change. If you search **`prep__`** (imputer, encoder, scaler), **re-export** **`features.parquet`**, **`feast apply`**, **`materialize_features.py`**, **restart API** (§J Plan 3). |
+| **Reproducibility** | Fix **`random_state`** on forest, CV **`shuffle`**, and **`numpy`** seeds so results are **repeatable** on the VM. |
+
+**Optional:** **`mlflow.sklearn.autolog()`** or save **`search.cv_results_`** as a **CSV artifact** for the examiner.
 
 ---
 
@@ -585,7 +642,30 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 ### Q: *(Extra)* Grid search vs randomized search vs Bayesian optimization?
 
-**Answer:** **GridSearchCV** — exhaustive over a **small** grid; expensive when many params. **RandomizedSearchCV** — sample **N** combinations; good for **wide** ranges. **Optuna / Hyperopt** — **sequential** learning of promising regions; best when each train is **costly**. For this lab’s dataset size, **5-fold stratified CV + modest grid or random search** on `RandomForestClassifier` is already a **strong viva story**.
+**Short answer:** They differ in **how** they pick the next hyperparameter combinations to try: **grid** = try **every** cell in a discrete table; **random** = try **random** draws from distributions; **Bayesian** = use **past** trial results to **suggest** promising regions. For this capstone, **grid or random + StratifiedKFold** is enough; **Optuna** shines when each trial is **expensive** or the space is **large**.
+
+**GridSearchCV (exhaustive grid)**
+
+- **What it is:** You list **finite** values per parameter (e.g. `max_depth ∈ {10, 20, None}`). Sklearn trains **every combination** (Cartesian product) × **each CV fold**.
+- **Pros:** **Complete** coverage of that small grid; **deterministic** given seed; easy to explain in viva.
+- **Cons:** **Curse of dimensionality** — 5 params with 4 values each → **4⁵ = 1024** configs × 5 folds; **wasteful** if many combos are obviously bad.
+- **When to use here:** **2–4** forest hyperparameters with **2–3** levels each on the Poridhi VM.
+
+**RandomizedSearchCV**
+
+- **What it is:** You define **distributions** (e.g. `max_depth` uniform from 5–40, `n_estimators` from {50,100,200,400}); each trial **samples** one combo; run **`n_iter`** trials.
+- **Pros:** Explores **wide** ranges without exploding the budget; often finds **good** regions faster than a **sparse** grid.
+- **Cons:** Might **miss** a narrow optimum unless **`n_iter`** is large; less **systematic** than full grid on tiny spaces.
+- **When to use here:** You want to sweep **`max_depth`** continuously or try many **`n_estimators`** without a full grid.
+
+**Bayesian optimization (e.g. Optuna, Hyperopt, skopt)**
+
+- **What it is:** Builds a **probabilistic surrogate** of “metric vs hyperparameters” and picks the next point to **maximize expected improvement** (or similar). **Sequential**: trial **t+1** uses outcomes from trials **1…t**.
+- **Pros:** **Sample-efficient** when one training run is **minutes/hours**; handles **conditional** spaces (e.g. only tune `max_depth` if `criterion=…`) well in Optuna.
+- **Cons:** More **moving parts** (storage backend, pruners); overkill if sklearn grid finishes in **minutes**.
+- **When to use here:** Extra credit / thesis flavor — “we plugged **Optuna** into `train.py` and logged trials to MLflow.”
+
+**Lab recommendation:** **`GridSearchCV` + `StratifiedKFold(5)`** on **`RandomForestClassifier`** with a **small** grid is the clearest **exam narrative**. Upgrade to **`RandomizedSearchCV`** if the grid is too big; use **Optuna** only if you need **efficiency** on a huge space or **early stopping** (pruning) per fold.
 
 ---
 
