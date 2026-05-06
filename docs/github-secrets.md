@@ -19,15 +19,15 @@ Configure these in the repository: **Settings → Secrets and variables → Acti
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
-| `PULUMI_CONFIG_PASSPHRASE` | `deploy.yml`, `destroy.yml` | Only if your Pulumi stack config is passphrase-encrypted; exported as env before `pulumi` commands |
+| `PULUMI_CONFIG_PASSPHRASE` | `deploy.yml`, `destroy.yml` | Only if my Pulumi stack config is passphrase-encrypted; exported as env before `pulumi` commands |
 
-If you do **not** use encrypted stack config, create an empty secret or omit it and remove the `env` entry from the workflows (or leave unset — empty env is usually fine).
+If I do **not** use encrypted stack config, create an empty secret or omit it and remove the `env` entry from the workflows (or leave unset — empty env is usually fine).
 
 ---
 
 ## When to add `SSH_PRIVATE_KEY` vs `SSH_PUBLIC_KEY`
 
-1. **Generate a dedicated key pair** for CI/infra (do not reuse your personal daily key if you can avoid it).
+1. **Generate a dedicated key pair** for CI/infra (do not reuse my personal daily key if I can avoid it).
 
 2. **Add `SSH_PUBLIC_KEY` first** (or at the same time as private):
    - Pulumi needs the **public** key when it runs `pulumi config set sshPublicKey …` so AWS can install `authorized_keys` on the new EC2 instance.
@@ -37,7 +37,7 @@ If you do **not** use encrypted stack config, create an empty secret or omit it 
    - The private key is only used **after** `pulumi up` succeeds, in the “Upload and run pipeline script on EC2” step.
    - It must be the private key that matches `SSH_PUBLIC_KEY`.
 
-**Order for a brand-new stack:** configure **both** secrets in GitHub **before** the first `deploy` workflow run, so Pulumi can create the instance with your public key and the runner can SSH with the private key.
+**Order for a brand-new stack:** configure **both** secrets in GitHub **before** the first `deploy` workflow run, so Pulumi can create the instance with my public key and the runner can SSH with the private key.
 
 ---
 
@@ -84,7 +84,7 @@ cat ~/.ssh/modelserve_github_ci       # → SSH_PRIVATE_KEY
 2. **Settings → Access Tokens** → create token.
 3. Add as `PULUMI_ACCESS_TOKEN`.
 
-For fully local state without Pulumi Cloud, you would change the workflows to use `pulumi login --local` and a different state backend — not configured in the default workflows.
+For fully local state without Pulumi Cloud, I would change the workflows to use `pulumi login --local` and a different state backend — not configured in the default workflows.
 
 ---
 
@@ -106,7 +106,7 @@ After secrets are set, run **Actions → Deploy (Pulumi + EC2)** by pushing to `
 **Yes, if all of the below are true** — the pipeline is designed to: Pulumi `up` → wait for Docker on EC2 → Kaggle download → `deploy_ec2.sh` (MLflow stack → train with `TRAIN_MAX_ROWS=50000` → Feast → full compose → `/health`).
 
 1. **Branch:** Workflow triggers on **`push` to `main` only**. Merging or pushing directly to `main` runs deploy; other branches do not.
-2. **GitHub repo visibility:** The EC2 script clones `https://github.com/<owner>/<repo>.git` with **no token**. **Private repos** will fail at `git clone` unless you add a PAT/deploy key (not in the default workflow).
+2. **GitHub repo visibility:** The EC2 script clones `https://github.com/<owner>/<repo>.git` with **no token**. **Private repos** will fail at `git clone` unless I add a PAT/deploy key (not in the default workflow).
 3. **AWS IAM:** The access key used in secrets must be allowed to create/update everything in `infrastructure/__main__.py` (VPC, EC2, EIP, S3, ECR, IAM, …).
 4. **Pulumi:** Same stack name **`dev`** as in the workflow; `PULUMI_ACCESS_TOKEN` must allow `pulumi login` non-interactively.
 5. **SSH key pair:** `SSH_PUBLIC_KEY` (Pulumi `sshPublicKey`) and `SSH_PRIVATE_KEY` (Actions SSH) must be the **same** pair; otherwise Pulumi or SSH will fail.
@@ -119,4 +119,4 @@ If any step fails, open the **Actions** log for the failed step (Pulumi, wait-fo
 
 ## Private repository (optional)
 
-To clone a **private** GitHub repo on EC2 you need credentials (e.g. fine-scoped PAT in a secret, `git clone https://x-access-token:TOKEN@github.com/...`, or a deploy key). The stock workflow only uses the public HTTPS URL.
+To clone a **private** GitHub repo on EC2 I need credentials (e.g. fine-scoped PAT in a secret, `git clone https://x-access-token:TOKEN@github.com/...`, or a deploy key). The stock workflow only uses the public HTTPS URL.

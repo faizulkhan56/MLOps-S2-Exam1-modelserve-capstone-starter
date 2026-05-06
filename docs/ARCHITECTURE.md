@@ -17,7 +17,7 @@ This repository implements **ModelServe**: an end-to-end MLOps capstone that tra
 ModelServe answers: *“Given a credit-card identifier (`cc_num`), what is the fraud risk using the latest trained model and the feature vector we agreed on at training time?”*
 
 - **Primary consumers:** HTTP clients calling **`POST /predict`** with `{"entity_id": <int>}` where `entity_id` maps to Feast’s entity **`cc_num`** (Kaggle fraud-detection schema).
-- **Operators:** course assessors, teammates, and you during demo — using MLflow UI, Grafana, Prometheus, and SSH/Compose on the host.
+- **Operators:** course assessors, teammates, and I during demo — using MLflow UI, Grafana, Prometheus, and SSH/Compose on the host.
 
 The system is educational and demo-oriented: one logical “production line” (train → register → materialize → serve → observe) with **explicit** trade-offs (single node, open ingress ports on EC2 for lab access) rather than maximum isolation or cost optimization.
 
@@ -114,7 +114,7 @@ flowchart LR
 
 **Online (inference):** Client → **`POST /predict`** → Feast **`get_online_features`** for `entity_id` (= `cc_num`) → build DataFrame row → sklearn **Pipeline** `predict` / `predict_proba` → JSON response + timestamps.
 
-**Diagram note:** For hand-drawn or Excalidraw assets, you can add images under `docs/diagrams/` and reference them here; the Mermaid diagrams above satisfy the rubric requirement for at least one diagram.
+**Diagram note:** For hand-drawn or Excalidraw assets, I can add images under `docs/diagrams/` and reference them here; the Mermaid diagrams above satisfy the rubric requirement for at least one diagram.
 
 ---
 
@@ -157,7 +157,7 @@ flowchart LR
 
 **Rationale:** OLTP semantics fit MLflow’s registry; Redis matches Feast’s documented online store patterns; separating “registry metadata” (Postgres) from “feature lookups” (Redis) avoids overloading one DB.
 
-**Trade-offs:** Two data stores to backup/reset; S3 in AWS may be underused if all runs stay local — document actual usage in your demo.
+**Trade-offs:** Two data stores to backup/reset; S3 in AWS may be underused if all runs stay local — document actual usage in my demo.
 
 ---
 
@@ -252,9 +252,9 @@ This section is the **architecture-grade** summary; step-by-step commands live i
 ### 5.2 Deploying a new model version
 
 1. Retrain with **`training/train.py`** (optionally new params / row cap via env).
-2. Transition or rely on script registering **Production** for **`modelserve_classifier`** (per your training script).
+2. Transition or rely on script registering **Production** for **`modelserve_classifier`** (per my training script).
 3. Regenerate Parquet if features changed; **`feast apply`** + **`materialize_features.py`**.
-4. **Restart API** container so it reloads Production model if your process loads once at startup (`docker compose up -d --build api` or full compose restart).
+4. **Restart API** container so it reloads Production model if my process loads once at startup (`docker compose up -d --build api` or full compose restart).
 
 ### 5.3 Common failure recovery
 
@@ -281,7 +281,7 @@ This section is the **architecture-grade** summary; step-by-step commands live i
 3. **Feature staleness:** Online features reflect last **materialization** — no real-time streaming ingest in this capstone.
 4. **Model governance:** No automated canary, shadow traffic, or approval workflow beyond MLflow stage transitions.
 5. **Cost / cleanup:** Forgotten stacks incur EC2/EIP/S3 cost; destroy workflow and **`force_destroy`** on bucket aid teardown but require discipline.
-6. **Scope shortcuts:** Tests, deeper IaC for RDS/ElastiCache, and enterprise SSO are out of scope unless you extend the repo.
+6. **Scope shortcuts:** Tests, deeper IaC for RDS/ElastiCache, and enterprise SSO are out of scope unless I extend the repo.
 
 ---
 
@@ -297,4 +297,4 @@ This section is the **architecture-grade** summary; step-by-step commands live i
 
 ---
 
-*Document version aligns with ModelServe capstone Phases 1–14. Update ADRs if you change topology or security model.*
+*Document version aligns with ModelServe capstone Phases 1–14. Update ADRs if I change topology or security model.*

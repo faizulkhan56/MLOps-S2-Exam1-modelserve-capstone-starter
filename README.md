@@ -66,7 +66,7 @@ Production-style ML serving: **FastAPI** inference, **MLflow** registry, **Feast
 
 ### Grafana: `failed to bind host port 0.0.0.0:3000`
 
-Compose publishes **`${GRAFANA_PORT:-3001}`**. If the error shows **3000**, your **`.env`** likely sets `GRAFANA_PORT=3000`. Use **`3001`** or remove the line, then `docker compose down` and `docker compose up -d`. Optional: set **`GF_SERVER_ROOT_URL`** in `.env` to match the host port you use (see `docker-compose.yml`).
+Compose publishes **`${GRAFANA_PORT:-3001}`**. If the error shows **3000**, my **`.env`** likely sets `GRAFANA_PORT=3000`. Use **`3001`** or remove the line, then `docker compose down` and `docker compose up -d`. Optional: set **`GF_SERVER_ROOT_URL`** in `.env` to match the host port I use (see `docker-compose.yml`).
 
 ### MLflow: `PermissionError` … `'/mlflow'` when running `training/train.py` on the host
 

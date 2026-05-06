@@ -53,7 +53,7 @@ docker compose down
 
 ## 3. EC2 deployment (manual operator)
 
-Prerequisites: **Pulumi stack** applied at least once; you can **SSH** as `ubuntu` to the **Elastic IP**; Docker from user-data is running.
+Prerequisites: **Pulumi stack** applied at least once; I can **SSH** as `ubuntu` to the **Elastic IP**; Docker from user-data is running.
 
 **Clone + env + stack (typical)**
 
@@ -95,7 +95,7 @@ export KAGGLE_KEY="..."
 
 Full table and key generation: [`github-secrets.md`](github-secrets.md).
 
-**Private GitHub repo:** default clone URL has **no token**; use a public repo or add PAT/deploy-key flow yourself.
+**Private GitHub repo:** the default clone URL has **no token**; **I** either use a public repo or add a PAT/deploy-key flow.
 
 ---
 
@@ -149,7 +149,7 @@ pulumi stack select dev
 pulumi destroy --yes
 ```
 
-**S3 / ECR**: bucket and repos are defined with destroy-friendly options in Pulumi; verify empty ECR repos before destroy if your org enforces policies.
+**S3 / ECR**: bucket and repos are defined with destroy-friendly options in Pulumi; verify empty ECR repos before destroy if my org enforces policies.
 
 ---
 

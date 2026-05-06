@@ -1,6 +1,6 @@
 # ModelServe — Demo guide (Phase 13)
 
-Use this checklist for **instructor demos**, **viva**, or **portfolio walkthrough**. Adjust URLs (`localhost` vs **EC2 Elastic IP**) for your environment.
+Use this checklist for **instructor demos**, **viva**, or **portfolio walkthrough**. Adjust URLs (`localhost` vs **EC2 Elastic IP**) for my environment.
 
 ---
 
@@ -76,7 +76,7 @@ curl -s http://<HOST>:8000/metrics | head -40
 
 ---
 
-## 4. Questions you should be ready to answer
+## 4. Questions I should be ready to answer
 
 | Question | Short answer |
 |----------|----------------|
@@ -84,7 +84,7 @@ curl -s http://<HOST>:8000/metrics | head -40
 | Why Postgres? | MLflow **tracking** backend store. |
 | Why not RDS/EKS? | Capstone scope: **single EC2** + Compose. |
 | What if `entity_id` is unknown? | Feast miss / missing features → **structured error**, not a random default score. |
-| How do you redeploy code? | **Push `main`** (CI) or **pull + `deploy_ec2.sh`** on the server. |
+| How do I redeploy code? | **Push `main`** (CI) or **pull + `deploy_ec2.sh`** on the server. |
 
 ---
 

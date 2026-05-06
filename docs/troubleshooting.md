@@ -59,7 +59,7 @@ Common errors and **practical fixes**. For secret setup and CI checklist, see [`
 ### `bind ... 3000` already allocated
 
 - **Cause:** `.env` sets **`GRAFANA_PORT=3000`** or another process uses 3000.
-- **Fix:** Set **`GRAFANA_PORT=3001`** (or free the port), **`docker compose down`** and **`up`**. Align **`GF_SERVER_ROOT_URL`** in `.env` if you override host port (see `.env.example` / compose comments).
+- **Fix:** Set **`GRAFANA_PORT=3001`** (or free the port), **`docker compose down`** and **`up`**. Align **`GF_SERVER_ROOT_URL`** in `.env` if I override host port (see `.env.example` / compose comments).
 
 ---
 
@@ -85,7 +85,7 @@ Common errors and **practical fixes**. For secret setup and CI checklist, see [`
 ### Only postgres + mlflow + redis running
 
 - **Cause:** Partial **`docker compose up`**.
-- **Fix:** **`docker compose up -d`** for full stack when you need API + monitoring.
+- **Fix:** **`docker compose up -d`** for full stack when I need API + monitoring.
 
 ---
 
@@ -94,7 +94,7 @@ Common errors and **practical fixes**. For secret setup and CI checklist, see [`
 ### `EntityAlreadyExists` (IAM role, etc.)
 
 - **Cause:** Name collision with orphaned AWS objects vs Pulumi state.
-- **Fix:** This repo’s current infra may omit IAM instance profile; if you still see IAM errors, align **code** with **state** (import or delete orphans in AWS) per instructor runbook.
+- **Fix:** This repo’s current infra may omit IAM instance profile; if I still see IAM errors, align **code** with **state** (import or delete orphans in AWS) per instructor runbook.
 
 ### Wrong region
 

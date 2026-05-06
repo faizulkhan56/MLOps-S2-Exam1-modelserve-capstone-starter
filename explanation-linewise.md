@@ -22,7 +22,7 @@
 
 ## 1. Big picture: two flows
 
-Your project has **two main flows**:
+This project has **two main flows**:
 
 ### A. Training flow
 
@@ -79,7 +79,7 @@ So **three responsibilities:** (1) train, (2) register in MLflow, (3) export Fea
 
 ### 2.3 Root path and `feature_schema`
 
-`ROOT = Path(__file__).resolve().parent.parent` is the **project root**, so paths like `ROOT / "data/raw/fraudTrain.csv"` work no matter where you run the script from.
+`ROOT = Path(__file__).resolve().parent.parent` is the **project root**, so paths like `ROOT / "data/raw/fraudTrain.csv"` work no matter where I run the script from.
 
 **Shared imports from `training/feature_schema.py`:**
 
@@ -182,7 +182,7 @@ Request counter → validate model & Feast → **`get_features(entity_id)`** →
 
 **`fraud_probability`** = **`predict_proba[0][1]`** (probability of fraud class **1**).
 
-> **Demo tip:** Flip one digit of **`entity_id`** → **`missing_features`** → proves you are not inventing feature vectors.
+> **Demo tip:** Flip one digit of **`entity_id`** → **`missing_features`** → proves I am not inventing feature vectors.
 
 ---
 

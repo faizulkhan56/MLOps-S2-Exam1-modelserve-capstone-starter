@@ -1,6 +1,6 @@
 # Viva / oral exam prep (Phase 14)
 
-**Questions, expanded answers, and extra “unseen” prompts** for the ModelServe capstone. Adapt examples to what you actually ran (local VM vs EC2, times, run IDs).
+**Questions, expanded answers, and extra “unseen” prompts** for the ModelServe capstone. Adapt examples to what I actually ran (local VM vs EC2, times, run IDs).
 
 **Related:** [`demo-guide.md`](demo-guide.md), [`submission-checklist.md`](submission-checklist.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`explanation-linewise.md`](../explanation-linewise.md). **Broader metric reference (regression + classification):** [§N](#n-universal-model-performance-metrics-reference).
 
@@ -14,10 +14,10 @@
 
 **Expanded:**
 
-- **EKS** would add control plane cost, manifests, ingress, and storage classes — most of that is **operations theatre** for this rubric, not the ML lifecycle story you are graded on.
+- **EKS** would add control plane cost, manifests, ingress, and storage classes — most of that is **operations theatre** for this rubric, not the ML lifecycle story I am graded on.
 - **Managed RDS / ElastiCache** reduce “day 2” work but **hide** the explicit split this capstone wants: **Postgres for MLflow metadata** vs **Redis for Feast online lookups**.
 - **Single EC2 + Compose** matches how many teams **prototype** production: same Compose file locally and on the server, easy logs (`docker compose logs`), single security group to reason about.
-- **Trade-off you should name in viva:** no horizontal scaling, no AZ failover — you would add an ALB + ASG + managed Redis for real production.
+- **Trade-off I should name in viva:** no horizontal scaling, no AZ failover — I would add an ALB + ASG + managed Redis for real production.
 
 ---
 
@@ -40,20 +40,20 @@
 **Expanded:**
 
 - **Model location:** Not re-downloaded per request — startup **`load_model`** (pattern in `api/` code) keeps latency predictable.
-- **Feature location:** Not recomputed from raw CSV at inference — they were **prepared in training**, written to **Parquet**, registered in Feast, then **materialized** into Redis for entities you chose to export.
+- **Feature location:** Not recomputed from raw CSV at inference — they were **prepared in training**, written to **Parquet**, registered in Feast, then **materialized** into Redis for entities I chose to export.
 - **Demo sentence:** “Inference combines **two sources of truth**: MLflow says **which weights**, Feast says **which feature vector** for this `cc_num`.”
 
 ---
 
 ### Q: *(Extra)* What is the blast radius if the EC2 instance dies?
 
-**Answer:** **Total** for this architecture: API, Redis, MLflow UI, and Grafana on that host all disappear until you restore or redeploy. **Pulumi + user-data** can recreate the VM, but **Redis and MLflow volumes** on the instance are not magically multi-AZ — you would need backups, S3 for artifacts only, and rerun train/materialize unless you restore volumes. This is a **known limitation**, not a bug.
+**Answer:** **Total** for this architecture: API, Redis, MLflow UI, and Grafana on that host all disappear until I restore or redeploy. **Pulumi + user-data** can recreate the VM, but **Redis and MLflow volumes** on the instance are not magically multi-AZ — I would need backups, S3 for artifacts only, and rerun train/materialize unless I restore volumes. This is a **known limitation**, not a bug.
 
 ---
 
 ### Q: *(Extra)* Why is MLflow on HTTP and exposed on port 5000 in the security group?
 
-**Answer:** **Course/demo convenience** — you need browser access to the MLflow UI from your laptop. In production you would put MLflow **behind VPN or SSO**, **TLS** termination at ALB, and **restrict ingress** to corporate IPs. Naming this shows you understand **defense in depth** beyond the capstone.
+**Answer:** **Course/demo convenience** — I need browser access to the MLflow UI from my laptop. In production I would put MLflow **behind VPN or SSO**, **TLS** termination at ALB, and **restrict ingress** to corporate IPs. Naming this shows I understand **defense in depth** beyond the capstone.
 
 ---
 
@@ -66,29 +66,29 @@
 **Expanded:**
 
 - The **registry name** is how the API resolves **`models:/modelserve_classifier/Production`** without hardcoding a run UUID.
-- The **artifact** includes the **full pipeline** (encoders + model), so inference uses the **same** transformations as training — critical when you add categoricals or scaling.
+- The **artifact** includes the **full pipeline** (encoders + model), so inference uses the **same** transformations as training — critical when I add categoricals or scaling.
 
 ---
 
 ### Q: Why Production stage?
 
-**Short answer:** The API is wired to **Production** so operations has a single, explicit pointer to **what runs in serving**; you can keep **Staging** for experiments without breaking live behavior.
+**Short answer:** The API is wired to **Production** so operations has a single, explicit pointer to **what runs in serving**; I can keep **Staging** for experiments without breaking live behavior.
 
 **Expanded:**
 
 - **Alternative anti-pattern:** embedding **run_id** in config — works but forces redeploy for every experiment winner.
-- **MLflow stages** are **conventions** — your CI could automate **transition** after tests pass; here it is often manual or script-driven after `train.py`.
+- **MLflow stages** are **conventions** — my CI could automate **transition** after tests pass; here it is often manual or script-driven after `train.py`.
 
 ---
 
-### Q: What metrics do you log and why?
+### Q: What metrics do I log and why?
 
 **Short answer:** **Accuracy, precision, recall, F1**, and **ROC-AUC** where applicable — to compare runs on **imbalanced** fraud data and justify threshold choices.
 
 **Expanded:**
 
 - On fraud data, **accuracy alone** is misleading (majority class dominates). **Recall** ties to “catch fraud”; **precision** to “false alarms”.
-- In viva, tie metrics to **business cost**: false negatives vs false positives — even if you did not implement cost-sensitive learning.
+- In viva, tie metrics to **business cost**: false negatives vs false positives — even if I did not implement cost-sensitive learning.
 
 ---
 
@@ -117,7 +117,7 @@
 
 **Expanded:**
 
-- This avoids **silent failure** — returning a default score for unknown entities would be dangerous in fraud (you would lie about confidence).
+- This avoids **silent failure** — returning a default score for unknown entities would be dangerous in fraud (I would lie about confidence).
 - **Demo tip:** Use **`training/sample_request.json`** after a successful train — those IDs exist in **`features.parquet`** and Redis after materialize.
 
 ---
@@ -129,19 +129,19 @@
 **Expanded:**
 
 - **Train/serve skew** means training used column order **X** but inference accidentally used **Y** — subtle bugs with identical accuracy on a slide but wrong decisions live.
-- Feast also lets you **swap online backends** (Redis → something else) without rewriting the API — only config/repo path changes.
+- Feast also lets me **swap online backends** (Redis → something else) without rewriting the API — only config/repo path changes.
 
 ---
 
 ### Q: *(Extra)* How “fresh” are online features?
 
-**Answer:** As fresh as your last **`materialize_features.py`** (and Feast TTL settings if you set any). This capstone is **batch** materialization, **not** streaming — if examiners ask about real-time fraud, you say: “We’d add stream ingestion + shorter materialization windows or online transforms — out of scope here.”
+**Answer:** As fresh as my last **`materialize_features.py`** (and Feast TTL settings if I set any). This capstone is **batch** materialization, **not** streaming — if examiners ask about real-time fraud, I say: “We’d add stream ingestion + shorter materialization windows or online transforms — out of scope here.”
 
 ---
 
 ### Q: *(Extra)* What is `feast apply` doing?
 
-**Answer:** It registers or updates **feature definitions** (entities, feature views, data sources) in the Feast registry so **`get_online_features`** knows **which columns** to pull from the **online store** for a given **entity list**. It does **not** by itself load all training rows into Redis — that is **`materialize`** / your materialize script.
+**Answer:** It registers or updates **feature definitions** (entities, feature views, data sources) in the Feast registry so **`get_online_features`** knows **which columns** to pull from the **online store** for a given **entity list**. It does **not** by itself load all training rows into Redis — that is **`materialize`** / my materialize script.
 
 ---
 
@@ -165,7 +165,7 @@
 
 **Expanded:**
 
-- At lab traffic, 10s is **fine**; at high QPS you might **reduce scrape frequency** or use **Pushgateway** for batch jobs — not needed here.
+- At lab traffic, 10s is **fine**; at high QPS I might **reduce scrape frequency** or use **Pushgateway** for batch jobs — not needed here.
 - **node-exporter** stays at **15s** because host metrics change slower than per-request API latency.
 
 ---
@@ -181,9 +181,9 @@
 
 ---
 
-### Q: *(Extra)* What does `/health` tell you that `/metrics` does not?
+### Q: *(Extra)* What does `/health` tell me that `/metrics` does not?
 
-**Answer:** **Health** is a **domain-level** check: is the process up and is the **Production model** loaded (and optionally dependencies reachable)? **Metrics** expose **time series** for aggregating SLIs over many requests. You need **both** — Kubernetes uses similar split (liveness vs RED metrics).
+**Answer:** **Health** is a **domain-level** check: is the process up and is the **Production model** loaded (and optionally dependencies reachable)? **Metrics** expose **time series** for aggregating SLIs over many requests. I need **both** — Kubernetes uses similar split (liveness vs RED metrics).
 
 ---
 
@@ -195,7 +195,7 @@
 
 **Expanded:**
 
-- **Branch protection** in real teams would require PR review — state what you actually used.
+- **Branch protection** in real teams would require PR review — state what I actually used.
 - **Concurrency group** `deploy-main` ensures **overlapping pushes** do not corrupt sequential deploys (`cancel-in-progress: false` means a second run **waits**, good for Pulumi state).
 
 ---
@@ -207,11 +207,11 @@
 **Expanded:**
 
 - **Public key** goes into Pulumi config → **EC2 `authorized_keys`**; **private key** is used by Actions to **SSH/SCP** after the instance exists. **Mismatch** = deploy fails at “run pipeline on EC2”.
-- **`PULUMI_CONFIG_PASSPHRASE`** only if your stack config is encrypted.
+- **`PULUMI_CONFIG_PASSPHRASE`** only if my stack config is encrypted.
 
 ---
 
-### Q: How do you tear down AWS resources?
+### Q: How do I tear down AWS resources?
 
 **Short answer:** **Actions → Destroy (Pulumi)** (`workflow_dispatch`), or locally **`pulumi destroy`** on stack **`dev`**. If state drifts, use **`pulumi state delete`** on URNs from logs.
 
@@ -258,23 +258,23 @@
 
 ### Q: *(Extra)* Is storing `cc_num` as an entity ethical?
 
-**Answer:** In **real** systems, raw PAN is **PCI-scoped** — you would tokenize or hash. The **Kaggle dataset** is a teaching artifact; in viva, say you would **never** log raw card numbers to stdout in production and would use **vaulted tokens** as entity IDs.
+**Answer:** In **real** systems, raw PAN is **PCI-scoped** — I would tokenize or hash. The **Kaggle dataset** is a teaching artifact; in viva, say I would **never** log raw card numbers to stdout in production and would use **vaulted tokens** as entity IDs.
 
 ---
 
 ## G. Quick “curveball” revision
 
-### Q: How would you add A/B testing?
+### Q: How would I add A/B testing?
 
 **Short answer:** Two **registry** versions or aliases (**Production** vs **Champion**), or routing layer sends **traffic fractions** to two API deployments; compare **`prediction_requests_total`** by **label** and offline KPIs.
 
 **Expanded:**
 
-- Feast must serve **compatible** feature rows for both models, or you version **feature views** alongside models.
+- Feast must serve **compatible** feature rows for both models, or I version **feature views** alongside models.
 
 ---
 
-### Q: Where would you put drift detection?
+### Q: Where would I put drift detection?
 
 **Short answer:** **Offline** jobs comparing recent feature distributions to training **reference**; push **gauges** to Prometheus or alert from **batch** results; optionally **evidently** / **great_expectations** on Parquet slices.
 
@@ -284,9 +284,9 @@
 
 ---
 
-### Q: *(Extra)* How would you blue/green the API only?
+### Q: *(Extra)* How would I blue/green the API only?
 
-**Answer:** Two target groups or two Compose stacks on **different ports** behind **nginx/traefik**, switch traffic by **weight**; **Redis and MLflow** might stay shared until you split them. Requires **health checks** and **session stickiness** if you had state (you mostly don’t).
+**Answer:** Two target groups or two Compose stacks on **different ports** behind **nginx/traefik**, switch traffic by **weight**; **Redis and MLflow** might stay shared until I split them. Requires **health checks** and **session stickiness** if I had state (I mostly don’t).
 
 ---
 
@@ -316,24 +316,24 @@
 
 ### Q: Which parameters can we tune so that `fraud_probability` or the prediction changes, and where in the codebase (or outside it) do we change them?
 
-**Short answer:** **`fraud_probability`** is **`predict_proba` class-1** from the **sklearn Pipeline** loaded from MLflow; it changes if the **model** or the **input feature row** changes. **Improve quality** mainly in **`training/train.py`** (data, split, preprocessing, **RandomForest** hyperparameters) and keep **train/serve** alignment via **`training/feature_schema.py`**, **Feast export**, and **`app/main.py`** defaults. **Environment** (`.env`) controls **how much data you train on** and **which registry model** the API loads.
+**Short answer:** **`fraud_probability`** is **`predict_proba` class-1** from the **sklearn Pipeline** loaded from MLflow; it changes if the **model** or the **input feature row** changes. **Improve quality** mainly in **`training/train.py`** (data, split, preprocessing, **RandomForest** hyperparameters) and keep **train/serve** alignment via **`training/feature_schema.py`**, **Feast export**, and **`app/main.py`** defaults. **Environment** (`.env`) controls **how much data I train on** and **which registry model** the API loads.
 
-**What the API does today (so you know what “tuning” means):**
+**What the API does today (so I know what “tuning” means):**
 
 - [`app/main.py`](../app/main.py) calls `model_loader.predict(X)`; **`fraud_probability`** is `float(proba[0][1])` — the **positive-class probability** for fraud.
-- **`prediction`** is the **argmax / 0.5 default** from sklearn’s `predict()` (standard **0.5 threshold** for `RandomForestClassifier` in binary case). There is **no separate `FRAUD_THRESHOLD` env var** in this repo; changing the **business threshold** (e.g. flag only if proba &gt; 0.7) would be a **new code path** in `main.py` if you add it.
+- **`prediction`** is the **argmax / 0.5 default** from sklearn’s `predict()` (standard **0.5 threshold** for `RandomForestClassifier` in binary case). There is **no separate `FRAUD_THRESHOLD` env var** in this repo; changing the **business threshold** (e.g. flag only if proba &gt; 0.7) would be a **new code path** in `main.py` if I add it.
 
 ---
 
 ### Plan 1 — Change model quality & probability calibration (retrain)
 
-These affect **both** train-time metrics and live **`fraud_probability`** after you register a new **Production** model and restart the API.
+These affect **both** train-time metrics and live **`fraud_probability`** after I register a new **Production** model and restart the API.
 
 | What | Where | Effect |
 |------|--------|--------|
-| **RandomForest hyperparameters** | [`training/train.py`](../training/train.py) — `RandomForestClassifier(...)` (~lines 187–194): `n_estimators`, `max_depth`, `min_samples_leaf`, `class_weight`, `max_features`, etc. | Stronger/weaker fit, different **probability margins**; `class_weight="balanced"` already mitigates imbalance — try **`balanced_subsample`** or manual weights if you study cost asymmetry. |
+| **RandomForest hyperparameters** | [`training/train.py`](../training/train.py) — `RandomForestClassifier(...)` (~lines 187–194): `n_estimators`, `max_depth`, `min_samples_leaf`, `class_weight`, `max_features`, etc. | Stronger/weaker fit, different **probability margins**; `class_weight="balanced"` already mitigates imbalance — try **`balanced_subsample`** or manual weights if I study cost asymmetry. |
 | **Random seed** | Same file: `RANDOM_STATE = 42` and split `random_state` | Reproducibility; different seeds → slightly different trees and **probas**. |
-| **Train/test split** | `train_test_split(..., test_size=0.2, stratify=y, ...)` | More **test** data → different reported metrics; does not change the fitted model unless you also change **training rows**. |
+| **Train/test split** | `train_test_split(..., test_size=0.2, stratify=y, ...)` | More **test** data → different reported metrics; does not change the fitted model unless I also change **training rows**. |
 | **Amount of training data** | Env **`TRAIN_MAX_ROWS`** (read in `_nrows()` / `load_raw()` in `train.py`) | Fewer rows → often **worse** generalization and noisier scores; **full file** usually better if runtime allows. |
 | **Preprocessing** | `train.py`: `SimpleImputer(strategy="median")`, `StandardScaler()`, `OneHotEncoder(..., max_categories=20)` | Different encoding/imputation → different **`X`** entering the forest → different **probas**. |
 | **Feature set** | [`training/feature_schema.py`](../training/feature_schema.py) — `FEAST_NUMERIC_FEATURE_COLS`; plus categorical columns listed in `train.py` (`cat_cols`) | Adding/removing features requires **syncing Feast** ([`feast_repo/feature_definitions.py`](../feast_repo/feature_definitions.py)), **re-export Parquet**, **`feast apply`**, **`materialize_features.py`**, and ensuring the API row order still matches the pipeline (see Plan 3). |
@@ -346,15 +346,15 @@ These affect **both** train-time metrics and live **`fraud_probability`** after 
 
 | What | Where | Effect |
 |------|--------|--------|
-| **Feature values for an entity** | **Feast / Redis** — online row comes from **`training/features.parquet`** via **`scripts/materialize_features.py`** | Same `cc_num`, but if you **re-materialize** after updating Parquet, **numeric features** in Redis change → **`fraud_probability`** changes. |
-| **Default categoricals at inference** | [`app/main.py`](../app/main.py) — `_CAT_DEFAULTS` / `_CAT_ORDER` (`category`, `state`, `gender` = `"unk"`) | Feast only supplies **numeric** columns; the API **injects** string defaults for categoricals the pipeline was trained with. Changing defaults changes the **one-hot** input → changes **proba**. **Keep aligned with training `fillna("unk")`** unless you intentionally change both train and serve. |
+| **Feature values for an entity** | **Feast / Redis** — online row comes from **`training/features.parquet`** via **`scripts/materialize_features.py`** | Same `cc_num`, but if I **re-materialize** after updating Parquet, **numeric features** in Redis change → **`fraud_probability`** changes. |
+| **Default categoricals at inference** | [`app/main.py`](../app/main.py) — `_CAT_DEFAULTS` / `_CAT_ORDER` (`category`, `state`, `gender` = `"unk"`) | Feast only supplies **numeric** columns; the API **injects** string defaults for categoricals the pipeline was trained with. Changing defaults changes the **one-hot** input → changes **proba**. **Keep aligned with training `fillna("unk")`** unless I intentionally change both train and serve. |
 | **Which model version is served** | `.env` / compose: **`MLFLOW_MODEL_NAME`**, **`MLFLOW_MODEL_STAGE`** ([`app/model_loader.py`](../app/model_loader.py)) | Pointing to **Staging** vs **Production** loads a **different artifact** → different scores for the same features. |
 
 ---
 
 ### Plan 3 — Avoid “improving” train but breaking serve (train/serve skew)
 
-If you change **column lists** or **preprocessing**:
+If I change **column lists** or **preprocessing**:
 
 1. Update **`training/train.py`** and **`training/feature_schema.py`** consistently.
 2. Update **`feast_repo/feature_definitions.py`** and run **`feast -c feast_repo apply`**.
@@ -367,7 +367,7 @@ Otherwise probabilities may look “better” offline but **fail or drift** onli
 
 ### Plan 4 — Optional product-level change (not implemented): custom fraud threshold
 
-To change **`prediction`** (0/1) **without** changing the underlying **`fraud_probability`** distribution, you would add logic such as: *if `fraud_probability >= T` then fraud*, with **`T`** from env (e.g. `FRAUD_THRESHOLD=0.7`). That lives naturally in **[`app/main.py`](../app/main.py)** after `predict_proba`. Today the repo uses sklearn’s default **`predict()`** for **`prediction`**, which is consistent with **0.5** for RF.
+To change **`prediction`** (0/1) **without** changing the underlying **`fraud_probability`** distribution, I would add logic such as: *if `fraud_probability >= T` then fraud*, with **`T`** from env (e.g. `FRAUD_THRESHOLD=0.7`). That lives naturally in **[`app/main.py`](../app/main.py)** after `predict_proba`. Today the repo uses sklearn’s default **`predict()`** for **`prediction`**, which is consistent with **0.5** for RF.
 
 ---
 
@@ -392,7 +392,7 @@ To change **`prediction`** (0/1) **without** changing the underlying **`fraud_pr
 | **Robustness** | **Bagging** (many trees on bootstrap samples) **reduces variance** compared to a single **DecisionTree**, which overfits easily. |
 | **Scope** | One **`sklearn.ensemble`** import, easy **`mlflow.sklearn.log_model`**, no GPU or separate boosting install — good for a **reproducible MLOps** story (train → register → serve). |
 
-**Honest caveat for viva:** Random Forest is **not guaranteed** to be the best model on this dataset; it is a **sensible baseline**. You can say you would **compare** against **gradient boosting** (XGBoost / LightGBM / CatBoost) in a real project.
+**Honest caveat for viva:** Random Forest is **not guaranteed** to be the best model on this dataset; it is a **sensible baseline**. I can say I would **compare** against **gradient boosting** (XGBoost / LightGBM / CatBoost) in a real project.
 
 ---
 
@@ -418,7 +418,7 @@ To change **`prediction`** (0/1) **without** changing the underlying **`fraud_pr
 
 ### Q: Why not another model class here? (When would others fit or not?)
 
-**Short answer:** Other models **could** fit — the choice is **engineering + pedagogy**, not a proof that RF is optimal. Below is how examiners expect you to argue trade-offs.
+**Short answer:** Other models **could** fit — the choice is **engineering + pedagogy**, not a proof that RF is optimal. Below is how examiners expect me to argue trade-offs.
 
 | Model family | Why it *could* work | Why we did **not** pick it as the default *here* |
 |--------------|---------------------|-----------------------------------------------|
@@ -442,12 +442,12 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 | **Accuracy** | \(\frac{TP + TN}{TP + TN + FP + FN}\) — fraction of **correct** predictions. | Easy to read but **misleading** when fraud is **rare**: predicting “all legitimate” can yield **high accuracy** and **zero recall** on fraud. **Never** cite accuracy alone for fraud. |
 | **Precision** | \(\frac{TP}{TP + FP}\) — of transactions **flagged** fraud, how many **actually** fraud. | **Cost of false alarms**: blocks, reviews, customer friction. Low precision → too many **false positives**. |
 | **Recall** | \(\frac{TP}{TP + FN}\) — of **real** fraud cases, how many we **catch**. | **Cost of missed fraud**: financial loss, regulatory exposure. Low recall → **false negatives**. |
-| **F1** | Harmonic mean of precision and recall: \(2 \cdot \frac{precision \cdot recall}{precision + recall}\). | Single **balance** when you care about **both** FP and FN trade-offs; useful for **comparing runs** with one number (still not a substitute for domain cost weights). |
+| **F1** | Harmonic mean of precision and recall: \(2 \cdot \frac{precision \cdot recall}{precision + recall}\). | Single **balance** when I care about **both** FP and FN trade-offs; useful for **comparing runs** with one number (still not a substitute for domain cost weights). |
 | **ROC-AUC** | Area under **ROC curve**: **TP rate vs FP rate** as **threshold** varies on **`predict_proba`**. | Measures **ranking** ability — does the model **score** fraud higher than non-fraud on average? Logged only when both **`y_test`** and **`pred`** contain **both classes** and enough variation (see `if len(np.unique(y_test)) > 1 and len(np.unique(pred)) > 1` in code); otherwise **ROC-AUC is skipped** (undefined or degenerate). |
 
 **Confusion matrix vocabulary (quick):** **TP** = fraud predicted fraud; **TN** = legit predicted legit; **FP** = legit flagged fraud; **FN** = fraud missed.
 
-**What we do *not* log (but you can mention):** **PR-AUC** (precision–recall curve area) is often **better than ROC-AUC** under **heavy imbalance** because it focuses on the **minority class**. Adding it would be a small extension to `train.py`.
+**What we do *not* log (but I can mention):** **PR-AUC** (precision–recall curve area) is often **better than ROC-AUC** under **heavy imbalance** because it focuses on the **minority class**. Adding it would be a small extension to `train.py`.
 
 **Regression metrics** (**MSE**, **RMSE**, **MAE**, **R²**, **adjusted R²**, etc.) apply to **continuous targets** — not this fraud **binary classification** problem — but examiners often ask for them anyway; see **[§N](#n-universal-model-performance-metrics-reference)** for a compact reference.
 
@@ -465,7 +465,7 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 3. **Preprocessing:** `OneHotEncoder(max_categories=20)` trades **rarity tail** vs noise; imputer **`median`** vs **`mean`** can shift metrics slightly.
 
-4. **Threshold / operating point:** Default sklearn **`predict()`** uses **0.5** on probability — often **suboptimal** for fraud. On a **validation** set, sweep thresholds and plot **precision vs recall**; pick the point your **business** accepts (e.g. minimum recall with precision floor).
+4. **Threshold / operating point:** Default sklearn **`predict()`** uses **0.5** on probability — often **suboptimal** for fraud. On a **validation** set, sweep thresholds and plot **precision vs recall**; pick the point my **business** accepts (e.g. minimum recall with precision floor).
 
 5. **Calibration:** If **`fraud_probability`** must align with **true frequencies**, consider **`CalibratedClassifierCV`** wrapping the pipeline or **Platt** scaling — improves **interpretability** of **proba**, not always raw ranking.
 
@@ -479,7 +479,7 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 ### Q: In what ratio do we split train vs test — is it the “most efficient”?
 
-**Short answer:** [`training/train.py`](../training/train.py) uses **`train_test_split(..., test_size=0.2, stratify=y, random_state=RANDOM_STATE)`** → **80% train / 20% test**. That is a **common default**, **not** a universal optimum; “efficiency” depends on **dataset size**, **class balance**, and whether you need **cross-validation** instead of a single split.
+**Short answer:** [`training/train.py`](../training/train.py) uses **`train_test_split(..., test_size=0.2, stratify=y, random_state=RANDOM_STATE)`** → **80% train / 20% test**. That is a **common default**, **not** a universal optimum; “efficiency” depends on **dataset size**, **class balance**, and whether I need **cross-validation** instead of a single split.
 
 **Expanded:**
 
@@ -491,8 +491,8 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 **Is 80/20 the “best”?**
 
-- **No single ratio is always best.** With **millions** of rows, **90/10** or **95/5** can still yield a **huge** test set — you might **train on more** data. With **very few** rows (or rare fraud), **20%** test might leave **too few** fraud cases in `y_test` → **noisy** precision/recall — then **k-fold cross-validation** or **stratified K-fold** is better than obsessing over 80/20.
-- **Efficiency** in ML usually means **generalization error**, not CPU time: you want a split (or CV) that **estimates production performance** without **using the test set for tuning** (otherwise you **leak** information — treat test as **once** for final reporting, or use a **validation** split inside train for hyperparameter search).
+- **No single ratio is always best.** With **millions** of rows, **90/10** or **95/5** can still yield a **huge** test set — I might **train on more** data. With **very few** rows (or rare fraud), **20%** test might leave **too few** fraud cases in `y_test` → **noisy** precision/recall — then **k-fold cross-validation** or **stratified K-fold** is better than obsessing over 80/20.
+- **Efficiency** in ML usually means **generalization error**, not CPU time: I want a split (or CV) that **estimates production performance** without **using the test set for tuning** (otherwise I **leak** information — treat test as **once** for final reporting, or use a **validation** split inside train for hyperparameter search).
 
 **Viva phrase:** *We use **80/20 stratified** as a **standard, reproducible** holdout; for smaller or messier data we’d switch to **stratified K-fold** or add a **validation** fold for tuning.*
 
@@ -506,12 +506,12 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 | Concept | Symptom | Typical cause | Fraud angle |
 |---------|---------|----------------|-------------|
-| **Underfitting** | **Train** metrics **and** **test** metrics both **low**; predictions look **random** or always majority class. | Model **capacity** too low (e.g. very shallow tree, heavy regularization), **wrong features**, or **bad preprocessing**. | Always predicting **non-fraud** → **high “accuracy”** but **zero recall** on fraud — looks OK until you read **recall**. |
+| **Underfitting** | **Train** metrics **and** **test** metrics both **low**; predictions look **random** or always majority class. | Model **capacity** too low (e.g. very shallow tree, heavy regularization), **wrong features**, or **bad preprocessing**. | Always predicting **non-fraud** → **high “accuracy”** but **zero recall** on fraud — looks OK until I read **recall**. |
 | **Overfitting** | **Train** metrics **much better** than **test**; large **gap**. | **Too many parameters** / deep trees, **too few samples**, **memorizing** noise, or **tuning hyperparameters using the test set** (cheating the metric). | Model **fits quirks** of training merchants/cards; **fails** on new cards — **precision/recall** drop on holdout. |
 | **Bias–variance tradeoff** | **Bias** = systematic error (wrong assumptions); **variance** = sensitivity to training sample draw. | Often shown as **U-shaped** total error: simple models **bias↑**, complex models **variance↑**. | Random Forest **averages trees** to **reduce variance** vs one tree; still can overfit if **`max_depth`** unbounded and **`n`** small. |
 | **Generalization** | Performance on **new** data from the **same distribution** as training. | Good generalization = train and test metrics **aligned** (small gap). | Production traffic **drifts** → generalization gets worse even without “overfitting” in the classical sense (**concept drift**). |
 
-**Signs in MLflow / `train.py`:** Compare logged **test** metrics across runs. If you logged **train** metrics too (not in this script by default), a **big train–test gap** hints at **overfitting**. If **both** are bad → **underfitting** or **data/label** issues.
+**Signs in MLflow / `train.py`:** Compare logged **test** metrics across runs. If I logged **train** metrics too (not in this script by default), a **big train–test gap** hints at **overfitting**. If **both** are bad → **underfitting** or **data/label** issues.
 
 **Related terms (quick):**
 
@@ -529,7 +529,7 @@ Metrics are computed on the **held-out test split** and logged to MLflow in [`tr
 
 ### Q: What is hyperparameter tuning, and do we do it automatically in this repo?
 
-**Short answer:** **Hyperparameters** are settings chosen **before** training (**tree depth**, **`n_estimators`**, **`max_features`**, imputer strategy, etc.). **Learned parameters** are **weights / splits** fitted from data. This repo uses **fixed** hyperparameters in [`training/train.py`](../training/train.py) (`RandomForestClassifier(n_estimators=100, max_depth=20, …)` — ~lines 187–194) — there is **no** built-in **`GridSearchCV`**, **`RandomizedSearchCV`**, or **Optuna** loop. “Tuning” today means **you edit numbers** and **re-run** `train.py`, then compare metrics in **MLflow**.
+**Short answer:** **Hyperparameters** are settings chosen **before** training (**tree depth**, **`n_estimators`**, **`max_features`**, imputer strategy, etc.). **Learned parameters** are **weights / splits** fitted from data. This repo uses **fixed** hyperparameters in [`training/train.py`](../training/train.py) (`RandomForestClassifier(n_estimators=100, max_depth=20, …)` — ~lines 187–194) — there is **no** built-in **`GridSearchCV`**, **`RandomizedSearchCV`**, or **Optuna** loop. “Tuning” today means **I edit numbers** and **re-run** `train.py`, then compare metrics in **MLflow**.
 
 **Expanded — why automate tuning (conceptually):**
 
@@ -554,7 +554,7 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 ### Q: What is the logic behind our chosen **numbers** for the forest and preprocessing?
 
-**Short answer:** They are **practical teaching defaults**: good baseline quality on tabular fraud, **reasonable train time** on a VM, and **explicit regularization** (depth cap, leaf size, balanced classes, capped one-hot). They are **not** proven optimal until you run **CV** or search.
+**Short answer:** They are **practical teaching defaults**: good baseline quality on tabular fraud, **reasonable train time** on a VM, and **explicit regularization** (depth cap, leaf size, balanced classes, capped one-hot). They are **not** proven optimal until I run **CV** or search.
 
 **Defined in:** [`training/train.py`](../training/train.py) (~165–194).
 
@@ -592,7 +592,7 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 2. **`GridSearchCV(..., cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42))`** repeatedly **re-partitions** **`X_train`** into 5 parts: train on **4**, score on **1**, rotate. Every training row is used **4** times for training and **1** time as **validation**.
 3. **`StratifiedKFold`** preserves **fraud proportion** in each fold — critical when positives are **rare**.
 4. **`search.fit(X_train, y_train)`** selects **`best_params_`** maximizing **`scoring`** (e.g. **`roc_auc`**) **averaged** across folds.
-5. With **`refit=True`** (default), **`search.best_estimator_`** **re-fits** the **full** **`Pipeline`** on **all** **`X_train`** using **`best_params_`** — that is the model you **log** and optionally **register**.
+5. With **`refit=True`** (default), **`search.best_estimator_`** **re-fits** the **full** **`Pipeline`** on **all** **`X_train`** using **`best_params_`** — that is the model I **log** and optionally **register**.
 6. **Then** compute test metrics **once** from **`search.best_estimator_.predict`** / **`predict_proba`** on **`X_test`**.
 
 #### Path (B): nested train / validation / test
@@ -619,7 +619,7 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 |------|----------------|
 | **Wall time** | Each hyperparameter **combination** × **5 folds** = **many** full pipeline fits; expect **longer** runs than a single `train.py`. |
 | **MLflow** | Richer **param** and **metric** history; easy to show **“baseline vs tuned”** in the UI. |
-| **Feast / API** | If search only touches **`clf__`**, **Parquet columns** unchanged → **no** Feast schema change. If you search **`prep__`** (imputer, encoder, scaler), **re-export** **`features.parquet`**, **`feast apply`**, **`materialize_features.py`**, **restart API** (§J Plan 3). |
+| **Feast / API** | If search only touches **`clf__`**, **Parquet columns** unchanged → **no** Feast schema change. If I search **`prep__`** (imputer, encoder, scaler), **re-export** **`features.parquet`**, **`feast apply`**, **`materialize_features.py`**, **restart API** (§J Plan 3). |
 | **Reproducibility** | Fix **`random_state`** on forest, CV **`shuffle`**, and **`numpy`** seeds so results are **repeatable** on the VM. |
 
 **Optional:** **`mlflow.sklearn.autolog()`** or save **`search.cv_results_`** as a **CSV artifact** for the examiner.
@@ -630,11 +630,11 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 **Concept link:** **Tuning** searches hyperparameters that control **model complexity** and **regularization**. **Overfitting** ≈ **too complex** for the data; **underfitting** ≈ **too simple** or **wrong setup**.
 
-| Problem | What you see | Hyperparameters / actions **in ModelServe** that typically **help** |
+| Problem | What I see | Hyperparameters / actions **in ModelServe** that typically **help** |
 |---------|----------------|----------------------------------------------------------------------|
-| **Overfitting** | Train metrics **much better** than test; unstable trees. | **Lower** `max_depth`; **raise** `min_samples_leaf` / `min_samples_split`; **lower** `max_features` (more randomness per split); **fewer** trees only helps slightly — focus on **depth/leaf** first; **more training data** (`TRAIN_MAX_ROWS` unset = full file); **stratified CV** so you don’t pick params that **lucky-fit** one split. |
+| **Overfitting** | Train metrics **much better** than test; unstable trees. | **Lower** `max_depth`; **raise** `min_samples_leaf` / `min_samples_split`; **lower** `max_features` (more randomness per split); **fewer** trees only helps slightly — focus on **depth/leaf** first; **more training data** (`TRAIN_MAX_ROWS` unset = full file); **stratified CV** so I don’t pick params that **lucky-fit** one split. |
 | **Underfitting** | **Both** train and test metrics **low**; model barely beats baseline. | **Higher** `max_depth` (until overfit); **more** `n_estimators`; **relax** `min_samples_leaf` (careful — can overfit); richer **features** (schema + Feast — avoid skew); check **`class_weight`** and **imbalance** handling. |
-| **Metric misleading** | Great test number after **many** manual tweaks using the **same** test set. | **Data leakage:** tune only with **CV on train** or a **validation** set; keep **`X_test`** **untouched** until final comparison — same rule if you add Optuna. |
+| **Metric misleading** | Great test number after **many** manual tweaks using the **same** test set. | **Data leakage:** tune only with **CV on train** or a **validation** set; keep **`X_test`** **untouched** until final comparison — same rule if I add Optuna. |
 
 **Preprocessing levers (same file):** **`OneHotEncoder(max_categories=20)`** — lowering categories can **regularize** (less sparse noise); raising can **underfit** if signal was in dropped tails.
 
@@ -648,17 +648,17 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 **GridSearchCV (exhaustive grid)**
 
-- **What it is:** You list **finite** values per parameter (e.g. `max_depth ∈ {10, 20, None}`). Sklearn trains **every combination** (Cartesian product) × **each CV fold**.
+- **What it is:** I list **finite** values per parameter (e.g. `max_depth ∈ {10, 20, None}`). Sklearn trains **every combination** (Cartesian product) × **each CV fold**.
 - **Pros:** **Complete** coverage of that small grid; **deterministic** given seed; easy to explain in viva.
 - **Cons:** **Curse of dimensionality** — 5 params with 4 values each → **4⁵ = 1024** configs × 5 folds; **wasteful** if many combos are obviously bad.
 - **When to use here:** **2–4** forest hyperparameters with **2–3** levels each on the Poridhi VM.
 
 **RandomizedSearchCV**
 
-- **What it is:** You define **distributions** (e.g. `max_depth` uniform from 5–40, `n_estimators` from {50,100,200,400}); each trial **samples** one combo; run **`n_iter`** trials.
+- **What it is:** I define **distributions** (e.g. `max_depth` uniform from 5–40, `n_estimators` from {50,100,200,400}); each trial **samples** one combo; run **`n_iter`** trials.
 - **Pros:** Explores **wide** ranges without exploding the budget; often finds **good** regions faster than a **sparse** grid.
 - **Cons:** Might **miss** a narrow optimum unless **`n_iter`** is large; less **systematic** than full grid on tiny spaces.
-- **When to use here:** You want to sweep **`max_depth`** continuously or try many **`n_estimators`** without a full grid.
+- **When to use here:** I want to sweep **`max_depth`** continuously or try many **`n_estimators`** without a full grid.
 
 **Bayesian optimization (e.g. Optuna, Hyperopt, skopt)**
 
@@ -667,7 +667,7 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 - **Cons:** More **moving parts** (storage backend, pruners); overkill if sklearn grid finishes in **minutes**.
 - **When to use here:** Extra credit / thesis flavor — “we plugged **Optuna** into `train.py` and logged trials to MLflow.”
 
-**Lab recommendation:** **`GridSearchCV` + `StratifiedKFold(5)`** on **`RandomForestClassifier`** with a **small** grid is the clearest **exam narrative**. Upgrade to **`RandomizedSearchCV`** if the grid is too big; use **Optuna** only if you need **efficiency** on a huge space or **early stopping** (pruning) per fold.
+**Lab recommendation:** **`GridSearchCV` + `StratifiedKFold(5)`** on **`RandomForestClassifier`** with a **small** grid is the clearest **exam narrative**. Upgrade to **`RandomizedSearchCV`** if the grid is too big; use **Optuna** only if I need **efficiency** on a huge space or **early stopping** (pruning) per fold.
 
 ---
 
@@ -679,7 +679,7 @@ Everything below is **not learned by gradient descent**; sklearn treats these as
 
 ### Q: What does ModelServe log today vs what other metrics are common in ML?
 
-**ModelServe (this project)** logs **classification** metrics on a **held-out test split**: **accuracy**, **precision**, **recall**, **F1**, and **ROC-AUC** when defined ([`training/train.py`](../training/train.py) — see **§K** for fraud-specific interpretation). The sections below are a **general viva cheat sheet** for **regression**, **extra classification metrics**, and a few **other** standard measures — useful when examiners ask *“what else would you use?”*
+**ModelServe (this project)** logs **classification** metrics on a **held-out test split**: **accuracy**, **precision**, **recall**, **F1**, and **ROC-AUC** when defined ([`training/train.py`](../training/train.py) — see **§K** for fraud-specific interpretation). The sections below are a **general viva cheat sheet** for **regression**, **extra classification metrics**, and a few **other** standard measures — useful when examiners ask *“what else would I use?”*
 
 ---
 

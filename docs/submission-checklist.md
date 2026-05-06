@@ -6,7 +6,7 @@ Use this before **submission**, **demo day**, or **portfolio packaging**.
 
 ## 1. Screenshots checklist
 
-Capture these for your report or slide deck (placeholder filenames are suggestions).
+Capture these for my report or slide deck (placeholder filenames are suggestions).
 
 | # | What to capture | Suggested filename |
 |---|-----------------|-------------------|
@@ -107,7 +107,7 @@ curl -s http://localhost:8000/metrics | head -30
 | **f1** | Harmonic mean of precision and recall. |
 | **roc_auc** | Discrimination ability of predicted probabilities (when both classes exist). |
 
-**Say in viva:** *We log these per run for comparison; Production promotion uses your registry policy (here: latest version moved to Production after train).*
+**Say in viva:** *We log these per run for comparison; Production promotion uses my registry policy (here: latest version moved to Production after train).*
 
 ---
 
