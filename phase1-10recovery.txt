@@ -1,6 +1,11 @@
+-----------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------
+
 Use this as your fresh Poridhi VM full recovery checklist for Phase 1–10.
 
 Fresh VM setup: Phase 1–10 recovery
+
 Step 0: Base tools
 sudo apt update
 sudo apt install -y python3-venv python3-pip python-is-python3 unzip git curl
@@ -17,7 +22,9 @@ sudo usermod -aG docker $USER
 Then log out/in.
 
 Phase 1–4 recovery
+--------------------------
 Step 1: Clone / pull repo
+
 cd ~/code
 git clone https://github.com/faizulkhan56/MLOps-S2-Exam1-modelserve-capstone-starter.git
 cd MLOps-S2-Exam1-modelserve-capstone-starter
@@ -26,14 +33,22 @@ If already cloned:
 
 cd ~/code/MLOps-S2-Exam1-modelserve-capstone-starter
 git pull
+
 Step 2: Python venv
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+
+
 Step 3: .env
+
 cp .env.example .env
+
+
 Step 4: Start local stack
+
 docker compose up -d --build
 docker ps
 
@@ -43,25 +58,39 @@ curl http://localhost:8000/health
 curl http://localhost:5000
 curl http://localhost:9090/api/v1/targets
 curl http://localhost:3001/api/health
+
 docker compose exec redis redis-cli PING
 
 Expected Redis:
 
 PONG
+
 Kaggle dataset setup
+
 Step 5: Kaggle CLI
+
 pip install kaggle
+
 Step 6: Kaggle token
+
 mkdir -p ~/.kaggle
+
+
+
 echo '{"username":"YOUR_KAGGLE_USERNAME","key":"YOUR_KAGGLE_KEY"}' > ~/.kaggle/kaggle.json
+
 chmod 700 ~/.kaggle
 chmod 600 ~/.kaggle/kaggle.json
+
 Step 7: Download dataset
+
 mkdir -p data/raw
 cd data/raw
 kaggle datasets download -d kartik2112/fraud-detection
 unzip fraud-detection.zip
+
 ls -lh
+
 cd ~/code/MLOps-S2-Exam1-modelserve-capstone-starter
 
 Expected:
@@ -69,7 +98,9 @@ Expected:
 fraudTrain.csv
 fraudTest.csv
 fraud-detection.zip
+
 Step 8: Train + register model
+
 source .venv/bin/activate
 python scripts/wait_for_mlflow.py
 python training/train.py
@@ -87,9 +118,10 @@ Expected:
 
 modelserve_classifier [('1', 'Production')]
 
-Version may be higher if retrained.
+Version may be higher if retrained.                   /////how to do that?
 
 Step 9: Feast apply
+
 feast -c feast_repo apply
 feast -c feast_repo entities list
 feast -c feast_repo feature-views list
@@ -98,14 +130,17 @@ Expected:
 
 cc_num
 fraud_txn_features
+
 Step 10: Materialize features
-python scripts/materialize_features.py
+
+python scripts/materialize_features.py   ///why we do that requirement?
 
 Expected:
 
 fraud_txn_features:
 100%
 Done.
+
 Phase 5–6 recovery
 
 After Phase 1–4 is ready:
@@ -114,12 +149,35 @@ docker compose build api
 docker compose up -d api
 pytest app/tests/ -q
 
+if fail try
+
+pytest -q
+
 Validate:
 
 curl -s http://localhost:8000/health
 curl -s -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
   -d @training/sample_request.json
+  
+  
+if found below  error
+------------------------------------
+
+{"code":"model_unavailable","message":"RESOURCE_DOES_NOT_EXIST: Registered Model with name=modelserve_classifier not found"}}(.venv)
+
+Fix order
+
+Run from project root:
+
+docker compose up -d postgres redis mlflow
+python scripts/wait_for_mlflow.py    //why we need to run this?
+
+
+------------------------------------------------------------------------
+
+
+  
 curl -s http://localhost:8000/metrics | grep prediction_
 
 Expected:
@@ -127,7 +185,9 @@ Expected:
 /health returns "status":"healthy"
 /predict returns prediction and probability
 tests pass
+
 Phase 7–8 recovery
+-------------------------------------------
 
 Start/restart monitoring stack:
 
@@ -156,8 +216,26 @@ Prometheus targets are up
 3 alert rules loaded
 Grafana database ok
 API user is not root
+
+
 Phase 9–10 recovery / Pulumi local run
+---------------------------------------------
+
+
 Step 11: AWS CLI config
+
+sudo apt update
+sudo apt install -y unzip curl
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+Verify installation
+
+aws --version
+
+
+
 aws configure
 
 Use:
@@ -168,22 +246,98 @@ Output: json
 Verify:
 
 aws sts get-caller-identity
+
 Step 12: Pulumi login
+
+Install Pulumi on Ubuntu / Poridhi VM
+
+cd infrastructure
+
+Run the official installer:
+
+curl -fsSL https://get.pulumi.com | sh
+
+Load it into current shell
+
+After install, run:
+
+export PATH=$PATH:$HOME/.pulumi/bin
+
+To make permanent:
+
+echo 'export PATH=$PATH:$HOME/.pulumi/bin' >> ~/.bashrc
+source ~/.bashrc
+
+Verify
+
+pulumi version
+
 pulumi login
 pulumi whoami
+
+
+
+
 Step 13: SSH key
+
 mkdir -p .keys
 ssh-keygen -t rsa -b 4096 -f .keys/modelserve-key -N ""
-Step 14: Pulumi dependencies
-cd infrastructure
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+
+//// no need Step 14: Pulumi dependencies
+
+
+///// noneed python3 -m venv .venv
+//// no need source .venv/bin/activate
+//// no need pip install -r requirements.txt
+
 Step 15: Stack setup
+
+/// no need export PATH=$PATH:$HOME/.pulumi/bin
+//// no need echo 'export PATH=$PATH:$HOME/.pulumi/bin' >> ~/.bashrc
+//// no need source ~/.bashrc
+
+pulumi login --local
+
 pulumi stack select dev || pulumi stack init dev
+
+if fail then run
+pulumi stack init dev
+
+if below error came
+
+pulumi stack init dev
+error: stack 'faizulkhan/modelserve-infra/dev' already exists
+
+pulumi stack ls
+pulumi stack select dev
+
 pulumi config set aws:region ap-southeast-1
 pulumi config set sshPublicKey "$(cat ../.keys/modelserve-key.pub)"
+
+
+pulumi cancel --yes
+pulumi refresh --yes
+pulumi destroy --yes
+
+
+pulumi up --yes
+
+
+if there is role related issue then
+----------------------------------------
+
+pulumi import aws:iam/role:Role modelserve-ec2-role modelserve-ec2-role
+
+
+if there is error instance profile already exist
+------------------------------------------------------
+
+pulumi import aws:iam/instanceProfile:InstanceProfile modelserve-ec2-profile modelserve-ec2-profile
+
+pulumi up --yes
+
 Step 16: Preview + create AWS resources
+
 pulumi preview
 pulumi up --yes
 pulumi stack output
@@ -196,26 +350,244 @@ prometheus_url
 mlflow_url
 s3_bucket_name
 ml_inference_repo_url
+
 Step 17: SSH to EC2
+
 EC2_IP=$(pulumi stack output instance_public_ip)
+
 ssh -i ../.keys/modelserve-key ubuntu@$EC2_IP
+ssh -i ../.keys/modelserve-key ubuntu@52.74.212.252
+
 EC2 deploy script usage
+
+Verify bootstrap
+
+groups
+docker ps
+docker compose version
+aws --version
+
+
+docker permission issue
+
+newgrp docker
+
+
 
 On EC2, after SSH:
 
 export MODELSERVE_REPO_URL="https://github.com/faizulkhan56/MLOps-S2-Exam1-modelserve-capstone-starter.git"
 export MODELSERVE_BRANCH="main"
 
-Then inside cloned repo:
 
+git clone https://github.com/faizulkhan56/MLOps-S2-Exam1-modelserve-capstone-starter.git ~/modelserve
+cd ~/modelserve
+
+mkdir -p ~/.kaggle
+
+echo '{"username":"faizulkhan","key":"KGAT_60721d7f647bbf197f06957a21547ec6"}' > ~/.kaggle/kaggle.json
+
+echo '{"username":"YOUR_KAGGLE_USERNAME","key":"YOUR_KAGGLE_KEY"}' > ~/.kaggle/kaggle.json
+
+chmod 700 ~/.kaggle
+chmod 600 ~/.kaggle/kaggle.json
+
+
+cd ~/modelserve
+python -m venv .venv
+source .venv/bin/activate
+pip install kaggle
+
+
+mkdir -p data/raw
+cd data/raw
+
+kaggle datasets download -d kartik2112/fraud-detection
+unzip fraud-detection.zip
+
+cd ~/modelserve
 chmod +x scripts/deploy_ec2.sh
+
 ./scripts/deploy_ec2.sh
+
+
+If training gets killed:
+
+export TRAIN_MAX_ROWS=50000
+./scripts/deploy_ec2.sh
+
 
 Important: EC2 also needs the Kaggle dataset before training can succeed. If deploy_ec2.sh stops at missing fraudTrain.csv, upload/download Kaggle data on EC2, then rerun.
 
+
 Validate public endpoints:
+
+
+52.74.212.252
 
 curl http://$EC2_IP:8000/health
 curl http://$EC2_IP:9090/api/v1/rules
 curl http://$EC2_IP:3001/api/health
 curl http://$EC2_IP:5000
+
+
+
+From local machine/browser:
+
+curl http://$EC2_IP:8000/health
+curl http://$EC2_IP:9090/api/v1/rules
+curl http://$EC2_IP:3001/api/health
+curl http://$EC2_IP:5000
+
+
+
+--------------------------------------------------------------------------
+----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+
+Public URLs:
+API:         http://54.255.81.111:8000/health
+MLflow:      http://54.255.81.111:5000
+Prometheus:  http://54.255.81.111:9090
+Grafana:     http://54.255.81.111:3001
+
+
+
+"http://54.255.81.111:3001"
+
+
+
+----------------------------------------------------------------
+------------------------------------------------------------
+check prediction endpoints
+
+--------------------------------------------------------
+
+curl -X POST http://52.74.212.252:8000/predict \
+  -H "Content-Type: application/json" \
+  -d @training/sample_request.json
+  
+  
+  
+curl -X POST http://52.74.212.252:8000/predict \
+  -H "Content-Type: application/json" \
+  -d @training/sample_request.json
+  
+  
+  
+  http://54.169.51.225/
+  
+  
+  
+curl -X POST http://52.74.212.252:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"entity_id":3592325941359225}'
+  
+  
+  
+multiple prediction
+---------------------
+
+for i in {1..20}; do
+curl -s -X POST http://52.74.212.252:8000/predict \
+-H "Content-Type: application/json" \
+-d '{"entity_id":3592325941359225}' >/dev/null
+done
+
+
+
+
+for i in {1..200}; do
+curl -s -X POST http://54.169.51.225:8000/predict \
+-H "Content-Type: application/json" \
+-d '{"entity_id":3592325941359225}' >/dev/null
+done
+  
+----------------------------------------------------------------
+
+//how to insert more testpoint on trainning/sample_request.json file?
+
+
+-------------------------------------------------------------------------
+---------------------------------------------------------------------------
+
+
+Find valid entity IDs
+
+--------------------------------------------------------------------
+
+Run this on EC2 or local project folder where training/features.parquet exists:
+
+python - <<'PY'
+import pandas as pd
+
+df = pd.read_parquet("training/features.parquet")
+
+print(df["cc_num"].drop_duplicates().head(20).to_list())
+PY
+
+
+[2703186189652095, 630423337322, 38859492057661, 3534093764340240, 375534208663984, 4767265376804500, 30074693890476, 6011360759745864, 4922710831011201, 2720830304681674, 4642894980163, 377234009633447, 180042946491150, 5559857416065248, 3514865930894695, 6011999606625827, 6011860238257910, 3565423334076143, 2348245054386329, 4956828990005111019]
+
+
+---------------------------------------------------------------------------------------
+
+Then use any returned value:
+
+curl -X POST http://54.255.81.111:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"entity_id":2703186189652095}'
+  
+  
+curl -X POST http://54.255.81.111:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"entity_id":630423337322}'
+  
+  
+  
+curl -X POST http://54.255.81.111:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"entity_id":4767265376804500}'
+  
+  
+  
+-----------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+-----------------------------------------------------------------------------------
+
+
+for login to grafna dashboard need grafna UN and PW
+----------------------------------------------------------
+docker compose config | grep GF_SECURITY
+
+
+      GF_SECURITY_ADMIN_PASSWORD: change_me
+      GF_SECURITY_ADMIN_USER: admin
+	  
+	  
+	  
+--------------------------------------------------------------------
+-------------------------------------------------------------------
+
+
+Destroy pulumi resorces
+----------------------------
+cd infrastructure
+pulumi stack select dev
+pulumi destroy --yes
+
+if there are destroy undeleted resources from pulumi
+-------------------------------------------
+cd infrastructure
+
+pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/instanceProfile:InstanceProfile::modelserve-ec2-profile'
+pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/rolePolicy:RolePolicy::modelserve-ec2-inline'
+pulumi state delete 'urn:pulumi:dev::modelserve-infra::aws:iam/role:Role::modelserve-ec2-role'
+
+
+stack deletoion
+---------------------
+pulumi destroy --yes
+pulumi stack rm dev
+
