@@ -344,6 +344,12 @@ flowchart TB
 
 **Region assumed:** `ap-southeast-1` (Singapore), matching this repo’s Pulumi default. Currency **USD**/month unless noted.
 
+### Baseline assumption — “current AWS pricing” for this BOTEC
+
+**Assume:** every estimate uses **AWS public on‑demand list prices** for **Asia Pacific (Singapore) `ap-southeast-1`**, in **USD**, as shown in the [**AWS Pricing Calculator**](https://calculator.aws/) or the service pricing pages **on the day I run the estimate**—**excluding** VAT/GST, **excluding** credits, **excluding** Enterprise Discount Program, and **excluding** Savings Plans / Reserved Instances / Fargate Spot for **steady production** API paths (model Spot separately if I use it only for batch jobs). AWS changes regional rates over time, so **snapshot the calculator export date** next to any total I quote (e.g. “BOTEC valid per calculator export **6 May 2026**”).
+
+**Orientation only (not Singapore):** the official [Fargate pricing](https://aws.amazon.com/fargate/pricing/) examples often cite **US East (N. Virginia)** Linux/x86 on the order of **~$0.040/vCPU-hour** and **~$0.004–0.005/GB-hour**—**Singapore is different**; always pick **`ap-southeast-1`** in the calculator for real BOTEC numbers.
+
 ### Step 1 — List what bills every month
 
 Write down every **paid component** in the target architecture (from §4.1 diagram):
