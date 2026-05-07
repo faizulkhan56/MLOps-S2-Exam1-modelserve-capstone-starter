@@ -403,20 +403,47 @@ Fill **Quantity × unit rate × time**; example formulas:
 | **S3 Standard** | `storage_GB × $/GB` + **request** tiers if high churn. |
 | **CloudWatch Logs** | `ingested_GB × ingestion_$` + `stored_GB × storage_$`. |
 
-### Step 5 — Worked example (illustrative — verify before quoting externally)
+### Step 5 — Worked BOTEC estimate (approximate monthly range)
 
-Assume **only** for math practice (rates are **placeholders**; substitute real numbers from Step 3):
+I’ll treat this as a **rough BOTEC estimate** using the architecture assumptions from this document and current AWS pricing references. It is intentionally approximate because AWS pricing varies by region, traffic, storage profile, and HA choices.
 
-| Item | Assumption | BOTEC scratchpad |
-|------|------------|------------------|
-| Fargate API | 2 tasks × 0.5 vCPU, 1 GiB, 730 h | `2 × (0.5×vCPU_rate + 1×mem_rate) × 730` |
-| RDS | `db.t3.medium`, Multi-AZ, 100 GiB gp3 | Instance line from calculator + storage line |
-| ElastiCache | 1× `cache.t3.micro` (demo—prod often larger) | `node_rate × 730` |
-| ALB | 1 ALB, low traffic | **Hourly** + small **LCU** bundle |
-| NAT | **2** NAT Gateways (2 AZs), **50 GB**/month through NAT | `2 × hourly × 730` + `50 × NAT_GB_rate` |
-| S3 | 200 GB artifacts + modest GET/PUT | Storage + request tiers |
+**Assumed target stack:** Fargate + ALB + NAT + RDS PostgreSQL + ElastiCache Redis + S3 + ECR + CloudWatch.
 
-**Sum:** `Total ≈ Σ(lines)` then **`× 1.10–1.20`** for **data transfer** and **pricing drift**.
+| Component | Assumption | Approx/month |
+|-----------|------------|--------------|
+| ECS Fargate API | 2 tasks, 0.5 vCPU, 1 GiB, 730 h | **$40–50** |
+| RDS PostgreSQL | `db.t3.medium` Multi-AZ + 100 GiB | **$110–130** |
+| ElastiCache Redis | 1× `cache.t3.micro` | **$15–25** |
+| ALB | 1 ALB, low traffic | **$22–30** |
+| NAT Gateway | 2 NATs + 50 GiB processed | **$68–80** |
+| S3 | 200 GiB artifacts/data | **$5–8** |
+| ECR | ~10 GiB images | **~$1** |
+| CloudWatch | logs + alarms | **$5–15** |
+| Data transfer contingency | 10–20% buffer | **$30–60** |
+
+**Rough total:** **$300–400/month**.
+
+**Safe planning number:** use **$350/month** as a first BOTEC estimate.
+
+### AWS pricing notes for this estimate
+
+- NAT Gateway pricing has **hourly + per-GB processed** dimensions.
+- ECR is billed mainly by **storage GiB-month**.
+- ALB pricing includes **hourly load balancer + LCU** dimensions.
+- Use the [AWS Pricing Calculator](https://calculator.aws/) for final quote in `ap-southeast-1`.
+
+### Biggest cost drivers
+
+1. **RDS Multi-AZ**
+2. **NAT Gateway**
+3. **Fargate always-on tasks**
+4. **ALB**
+
+### Cheaper demo/dev variant (non-production)
+
+For a lower-cost environment, use **Single-AZ RDS + 1 NAT + smaller Redis + stop non-prod when idle**.
+
+- Expected rough range: **$150–220/month**.
 
 ### Step 6 — Sanity checks
 
