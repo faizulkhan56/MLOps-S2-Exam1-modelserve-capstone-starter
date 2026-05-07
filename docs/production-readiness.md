@@ -1,6 +1,6 @@
 # Production readiness: gaps, evaluation, and migration
 
-This document describes **design limitations** of the current ModelServe capstone stack, **how to identify and judge them**, and a **step-by-step path** toward a production-grade deployment—including **high availability (HA)**, **TLS**, an **Application Load Balancer (ALB)**, **removing single-EC2 dependency**, and honest use of **ECR** and **S3**. It also maps required changes across **application code**, **infrastructure**, and **monitoring**.
+This document describes **design limitations** of the current ModelServe capstone stack, **how to identify and judge them**, and a **step-by-step path** toward a production-grade deployment—including **high availability (HA)**, **TLS**, an **Application Load Balancer (ALB)**, **removing single-EC2 dependency**, and honest use of **ECR** and **S3**. It adds a **target production flow diagram** (§4.1), maps required changes across **application code**, **infrastructure**, and **monitoring**, and ends with a step-by-step **BOTEC** for **rough AWS monthly cost** (§12).
 
 ---
 
@@ -96,6 +96,72 @@ Order matters: **durability and secrets** before **horizontal scale**, **TLS** b
 5. **Observability:** CloudWatch/container insights or Prometheus operator; ALB access logs; centralize logs (e.g., CloudWatch Logs / OpenSearch).
 
 The sections below break this into **code**, **infra**, and **monitoring** steps.
+
+### 4.1 Target production flow (end-to-end diagram)
+
+This is the **same narrative style** as the capstone runtime diagram in [`ARCHITECTURE.md`](ARCHITECTURE.md) §2.3, but for the **intended production shape**: **immutable images**, **managed data**, **TLS at the load balancer**, and **no single EC2** for the serving path. Read **top → bottom**.
+
+```mermaid
+flowchart TB
+  subgraph CI["① CI/CD — build once, deploy many"]
+    direction LR
+    GH[GitHub<br/>main branch]
+    ACT[Actions<br/>test · lint · scan]
+    BLD[Build images]
+    PUSH[(ECR<br/>push by digest or tag)]
+    DEP[IaC + deploy<br/>Pulumi · ECS · CD]
+    GH --> ACT --> BLD --> PUSH
+    ACT --> DEP
+    PUSH --> DEP
+  end
+
+  subgraph EDGE["② Edge — TLS and routing"]
+    direction LR
+    USR[Clients<br/>HTTPS]
+    ACM[ACM<br/>certificate]
+    ALB[Application Load Balancer<br/>443 · health checks]
+    USR --> ALB
+    ACM -.-> ALB
+  end
+
+  subgraph APP["③ Compute — private subnets · multi-AZ"]
+    direction TB
+    TG[Target group<br/>IP or instance mode]
+    FX[ECS Fargate / ASG / EKS<br/>desired count ≥ 2 across AZs]
+    API[FastAPI containers<br/>pull from ECR]
+    DEP --> FX
+    PUSH --> FX
+    ALB --> TG --> FX --> API
+  end
+
+  subgraph DATA["④ Managed state — shared across tasks"]
+    direction TB
+    RDS[(RDS PostgreSQL<br/>MLflow backend store)]
+    EC[(ElastiCache Redis<br/>Feast online)]
+    S3[(S3<br/>MLflow artifacts · Feast offline optional)]
+    API --> EC
+    API --> RDS
+    MLsvc[MLflow server svc optional<br/>or hybrid pattern]
+    MLsvc --> RDS
+    MLsvc --> S3
+    API -.->|load Production model| MLsvc
+  end
+
+  subgraph OUT["⑤ Observability & egress"]
+    direction LR
+    NAT[NAT Gateway<br/>optional per AZ]
+    CW[CloudWatch<br/>logs · metrics · alarms]
+    MP[Optional AMP / Grafana]
+    API --> CW
+    ALB --> CW
+    FX --> NAT
+    CW -.-> MP
+  end
+
+  S3 --> MLsvc
+```
+
+**How this differs from today:** **No** `docker compose --build` on the prod host for the API path; **no** Postgres/Redis **only** on local volumes for prod; **users never** hit instance IP:port—only **ALB:443**. **ECR + RDS + ElastiCache + S3** are on the **hot path**; costs scale with **tasks, DB size, cache nodes, and NAT/ALB LCUs**—see **§12 BOTEC**.
 
 ---
 
@@ -272,7 +338,93 @@ The sections below break this into **code**, **infra**, and **monitoring** steps
 
 ---
 
-## 12. What to say in a demo vs a production interview
+## 12. AWS infrastructure BOTEC (back-of-the-envelope monthly cost)
+
+**BOTEC** = *back-of-the-envelope calculation*: a **repeatable** rough monthly estimate before opening the [**AWS Pricing Calculator**](https://calculator.aws/) or the official **per-service pricing pages**. Numbers move with region, purchase options (Savings Plans), and AWS price changes—**always reconcile** before budgeting.
+
+**Region assumed:** `ap-southeast-1` (Singapore), matching this repo’s Pulumi default. Currency **USD**/month unless noted.
+
+### Step 1 — List what bills every month
+
+Write down every **paid component** in the target architecture (from §4.1 diagram):
+
+| # | Component | Bills mainly by… |
+|---|-----------|------------------|
+| 1 | **VPC** | Usually no charge for VPC/subnets; **NAT Gateway**, **VPC endpoints**, **public IPs** cost money. |
+| 2 | **NAT Gateway** | **Hourly** per NAT + **GB processed** (often the surprise line item). |
+| 3 | **Application Load Balancer** | **Hourly** per ALB + **LCU usage** (connections, new flows, rules, bytes). |
+| 4 | **ACM** | Public certs on AWS **free**; **private CA** costs extra (usually skip for BOTEC). |
+| 5 | **ECS Fargate** (or EC2 for tasks) | **vCPU-hours** + **GB-hours** per task × **task count** × **hours running**. |
+| 6 | **ECR** | **Storage** GiB-month for images + **data transfer** out to internet (often small if stays in-region). |
+| 7 | **RDS PostgreSQL** | **Instance hours** (class × Single vs Multi-AZ) + **storage GiB-month** + **IOPS** (gp3/io2) + **backup** beyond free tier. |
+| 8 | **ElastiCache Redis** | **Node hours** × node count × instance type + optional **replicas**. |
+| 9 | **S3** | **Storage** class + **requests** (PUT/GET) + **lifecycle** transitions. |
+| 10 | **CloudWatch** | **Logs ingestion** GB + **stored** GB + **custom metrics** + **alarms** (first alarms often cheap). |
+| 11 | **Data transfer** | **Cross-AZ**, **out to internet**, **NAT** processing—add **10–20% contingency** if unsure. |
+
+Skip components I **do not** deploy (e.g. no NAT if using **IPv6 egress-only** or **VPC endpoints** only—rare for first BOTEC).
+
+### Step 2 — Fix “always-on” vs “elastic” assumptions
+
+1. **Running hours per month:** use **730** h/month for 24/7 (`24 × 365 / 12 ≈ 730`).
+2. **API tier:** pick **desired task count** (e.g. **2** for HA) and **size** (e.g. **0.5 vCPU, 1 GiB** per task).
+3. **RDS:** pick **instance class** (e.g. `db.t3.medium`) and **Multi-AZ** vs **Single-AZ** (Multi-AZ roughly **doubles** instance cost vs single-instance standby pricing model—verify in calculator).
+4. **ElastiCache:** pick **node type** and **# nodes** (primary + replica for HA).
+5. **NAT:** **one NAT per AZ** for symmetric HA outbound vs **one NAT** for cost cap (trade availability).
+
+### Step 3 — Pull unit prices (one-time lookup)
+
+For each row in Step 1, open the official **pricing page** for **ap-southeast-1** and note:
+
+- **$/hour** (ALB, NAT, RDS instance, ElastiCache node, Fargate vCPU and GB).
+- **$/GB-month** (EBS if EC2, RDS storage, S3 Standard, ECR storage).
+- **$/LCU-hour** or ALB **processed bytes** rules (use calculator for LCUs if unsure).
+
+Bookmark the [**Pricing Calculator**](https://calculator.aws/) and export a CSV when the architecture stabilizes.
+
+### Step 4 — Compute each line (template)
+
+Fill **Quantity × unit rate × time**; example formulas:
+
+| Line item | Formula sketch |
+|-----------|----------------|
+| **Fargate (Linux)** | `(vCPU_rate × vCPU × task_count × 730) + (mem_rate × GiB × task_count × 730)` — use **Fargate pricing** for region/OS. |
+| **RDS instance** | `instance_hourly × 730` × **(2 if Multi-AZ pricing model says so)** — calculator handles Multi-AZ explicitly. |
+| **RDS storage** | `gp3_price_per_GB_month × allocated_GiB`. |
+| **ElastiCache** | `node_hourly × node_count × 730`. |
+| **ALB** | `alb_hourly × 730` + **LCU charges** (use calculator “Load Balancer” with expected RPS if known). |
+| **NAT** | `nat_hourly × nat_count × 730` + **`$ per GB processed`** × **estimated egress GB through NAT**. |
+| **S3 Standard** | `storage_GB × $/GB` + **request** tiers if high churn. |
+| **CloudWatch Logs** | `ingested_GB × ingestion_$` + `stored_GB × storage_$`. |
+
+### Step 5 — Worked example (illustrative — verify before quoting externally)
+
+Assume **only** for math practice (rates are **placeholders**; substitute real numbers from Step 3):
+
+| Item | Assumption | BOTEC scratchpad |
+|------|------------|------------------|
+| Fargate API | 2 tasks × 0.5 vCPU, 1 GiB, 730 h | `2 × (0.5×vCPU_rate + 1×mem_rate) × 730` |
+| RDS | `db.t3.medium`, Multi-AZ, 100 GiB gp3 | Instance line from calculator + storage line |
+| ElastiCache | 1× `cache.t3.micro` (demo—prod often larger) | `node_rate × 730` |
+| ALB | 1 ALB, low traffic | **Hourly** + small **LCU** bundle |
+| NAT | **2** NAT Gateways (2 AZs), **50 GB**/month through NAT | `2 × hourly × 730` + `50 × NAT_GB_rate` |
+| S3 | 200 GB artifacts + modest GET/PUT | Storage + request tiers |
+
+**Sum:** `Total ≈ Σ(lines)` then **`× 1.10–1.20`** for **data transfer** and **pricing drift**.
+
+### Step 6 — Sanity checks
+
+- **NAT dominates** small stacks: if BOTEC looks huge, revisit **NAT count**, **VPC endpoints for S3/ECR**, or **single NAT + AZ trade-off**.
+- **RDS + ElastiCache** often beat **self-managed DB on EC2** for ops, not always for **sticker price**—compare **Single-AZ dev** vs **Multi-AZ prod**.
+- **Right-size Fargate**: doubling tasks without traffic adds **idle cost**; scale on **CPU/memory**, not copy-paste HA alone.
+
+### Step 7 — Document assumptions for the trainer / finance review
+
+Keep a one-page note: **region**, **AZ strategy**, **instance classes**, **traffic guess**, **Multi-AZ yes/no**, and **calculator export date**. That is enough to defend a **order-of-magnitude** monthly run cost in a capstone or stakeholder meeting.
+
+---
+
+## 13. What to say in a demo vs a production interview
 
 - **Demo / capstone:** honestly describe **single EC2**, **local image build**, **volume-backed MLflow artifacts**, **Redis + file Feast offline**, and **ECR/S3 provisioned for continuity and future production alignment**.
 - **Production conversation:** articulate **RPO/RTO**, **multi-AZ**, **TLS at ALB**, **immutable deploys from ECR**, **S3-backed artifacts**, **managed data tier**, and **observability**—this document is the bridge between the two.
