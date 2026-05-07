@@ -108,13 +108,80 @@ flowchart LR
 
 - **Security group ingress:** TCP **22** (SSH), **8000** (API), **5000** (MLflow), **3001** (Grafana), **9090** (Prometheus) from `0.0.0.0/0` — suitable for a **lab/demo**; production would restrict sources and add TLS/WAF.
 
-### 2.3 Data and model path (two planes)
+### 2.3 End-to-end flow (trainer view)
+
+The diagrams in §2.1 (runtime) and §2.2 (AWS) show *layers*. The diagram below is a single **story**: what happens from a **git push** through **training and Feast** to **live `/predict`** and **dashboards**. Read it **top → bottom**; each numbered band is one phase of the capstone.
+
+```mermaid
+flowchart TB
+  subgraph D["① Delivery — code lands on a provisioned host"]
+    direction LR
+    GH[GitHub<br/>push to main]
+    GA[GitHub Actions<br/>deploy.yml]
+    PU[Pulumi<br/>VPC · EC2 · EIP · S3 · ECR]
+    SSH[SSH + scripts<br/>deploy_ec2_pipeline.sh]
+    EC2[EC2 Ubuntu<br/>Docker + repo clone]
+
+    GH --> GA
+    GA --> PU
+    GA --> SSH
+    PU --> EC2
+    SSH --> EC2
+  end
+
+  subgraph M["② ML offline — train, registry, materialize (host / CI pipeline)"]
+    direction TB
+    DC[docker compose<br/>Postgres · Redis · MLflow · …]
+    CSV[Kaggle CSV<br/>data/raw]
+    TR[training/train.py]
+    REG[MLflow registry<br/>modelserve_classifier @ Production]
+    PQ[training/features.parquet]
+    FA[feast apply]
+    MAT[scripts/materialize_features.py]
+    RD[(Redis<br/>online store)]
+
+    EC2 --> DC
+    EC2 --> CSV
+    CSV --> TR
+    DC --> TR
+    TR --> REG
+    TR --> PQ
+    PQ --> FA
+    FA --> MAT
+    MAT --> RD
+    REG --> MLF[(MLflow server + Postgres<br/>metadata · artifacts volume)]
+    DC --> MLF
+  end
+
+  subgraph L["③ Live inference & observability"]
+    direction TB
+    CL[HTTP client<br/>curl / browser]
+    API[FastAPI :8000<br/>/predict · /health · /metrics]
+    FE[Feast SDK<br/>get_online_features]
+    SK[sklearn Pipeline<br/>loaded from MLflow Production]
+
+    CL --> API
+    API --> FE
+    FE --> RD
+    API --> SK
+    SK --> MLF
+    API --> PR[Prometheus :9090]
+    PR --> GR[Grafana :3001]
+    MLF -.->|optional MLflow UI| CL
+  end
+
+  DC --> API
+```
+
+**How to explain this in two minutes:** *(1)* **Actions** provisions **AWS** and runs **SSH** so the **same Compose stack** exists on EC2 as on a laptop. *(2)* **Train** writes the **registry** and **Parquet**, **Feast** definitions are applied, **materialize** fills **Redis** for exported entities. *(3)* Each **`POST /predict`** loads **features from Redis via Feast** and **weights from MLflow**, then **Prometheus/Grafana** track latency and errors.
+
+### 2.4 Data and model path (two planes)
 
 **Offline (training):** `data/raw/fraudTrain.csv` → `training/train.py` → MLflow run + register **`modelserve_classifier`** @ **Production** → writes **`training/features.parquet`** + sample request JSON → `feast -c feast_repo apply` → `scripts/materialize_features.py` → **Redis** keys for entities present in the export.
 
 **Online (inference):** Client → **`POST /predict`** → Feast **`get_online_features`** for `entity_id` (= `cc_num`) → build DataFrame row → sklearn **Pipeline** `predict` / `predict_proba` → JSON response + timestamps.
 
-**Diagram note:** For hand-drawn or Excalidraw assets, I can add images under `docs/diagrams/` and reference them here; the Mermaid diagrams above satisfy the rubric requirement for at least one diagram.
+**Diagram note:** For hand-drawn or Excalidraw assets, I can add images under `docs/diagrams/` and reference them here; the Mermaid diagrams above satisfy the rubric requirement for at least one diagram. **§2.3** is the single **end-to-end** picture; **§2.1–2.2** zoom into runtime services and AWS provisioning respectively.
 
 ---
 
