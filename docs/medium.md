@@ -193,9 +193,32 @@ flowchart LR
 
 ### 4.1 Kaggle dataset
 
-- **Dataset:** [kartik2112/fraud-detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) (not committed; large CSVs are gitignored).
-- **Primary training file:** `fraudTrain.csv` → expected at `data/raw/fraudTrain.csv` (or `FRAUD_TRAIN_PATH`).
-- **`fraudTest.csv`:** may exist in the Kaggle bundle for holdout evaluation; **this repo’s default training path** is **`fraudTrain.csv`** with an internal **train/test split** in `train.py`.
+- **Dataset (authoritative listing):** [Credit Card Transactions Fraud Detection — kartik2112/fraud-detection](https://www.kaggle.com/datasets/kartik2112/fraud-detection) on Kaggle. The bundle is **not committed** here; large CSVs stay under `data/raw/` and are **gitignored** so clones stay small.
+- **Primary training file:** `fraudTrain.csv` → expected at `data/raw/fraudTrain.csv` (or override with `FRAUD_TRAIN_PATH`).
+- **`fraudTest.csv`:** often shipped alongside `fraudTrain.csv` for a **held-out** test file in competitions and tutorials. **ModelServe** does **not** read `fraudTest.csv` by default: `training/train.py` loads **`fraudTrain.csv`** and performs an **internal stratified 80/20 split** for metrics and model fitting.
+
+**What the dataset represents (context from public write-ups of similar “synthetic credit card fraud” bundles on Kaggle):** each row is usually **one authorized transaction attempt** tied to a **card** (`cc_num`), with a wall-clock time, purchase amount, coarse geography (cardholder city/zip vs merchant location), and a **binary fraud label**. Many of these datasets are **synthetically generated** (for example Sparkov-style generators discussed on Kaggle and in EDA notebooks), so fields are **clean and complete** compared with raw issuer logs — good for teaching pipelines, not a substitute for production fraud analytics.
+
+**Semantic guide — columns ModelServe actually trains on or derives** (meanings are **schema-level**; see the [dataset page](https://www.kaggle.com/datasets/kartik2112/fraud-detection) for the author’s own wording when logged into Kaggle):
+
+| CSV column | Typical meaning (public / community descriptions) | Role in ModelServe |
+|------------|---------------------------------------------------|-------------------|
+| `trans_date_trans_time` | Local transaction timestamp string from the generator. | Parsed to UTC **`event_timestamp`** for Feast (`RAW_TIMESTAMP_COL` → `EVENT_TIMESTAMP_COL`). |
+| `cc_num` | Masked or synthetic card identifier; stable **per customer** in the file. | **Entity key** — joins Parquet, Redis online store, and API `entity_id` (`ENTITY_ID_COL`). |
+| `is_fraud` | 0/1 fraud flag for that row. | **Label** (`TARGET_COL`); non-binary rows dropped. |
+| `amt` | Transaction dollar amount. | Numeric feature + Feast online field. |
+| `lat`, `long` | Approximate coordinates for the **cardholder / billing** side. | Numeric features; distance patterns often correlate with fraud in tutorials. |
+| `city_pop` | Population of the city associated with the card side. | Numeric proxy for urban vs rural density. |
+| `merch_lat`, `merch_long` | Merchant / terminal side coordinates. | Lets the model relate **customer location vs merchant location** (velocity / distance heuristics in EDA). |
+| `unix_time` | Epoch seconds (redundant with timestamp but explicit). | Numeric; sometimes used as drift or recency signal in tree models. |
+| `zip` | ZIP or postal-style code from the CSV. | Coerced with `to_numeric` for a **single numeric column** in sklearn + Feast. |
+| `gender` | Single-letter or short code (`M`/`F` / similar). | **String** categorical for `OneHotEncoder`; also mapped to **`gender_code`** (0/1 float) for the **numeric-only** Feast slice. |
+| `category` | Merchant category (`gas_transport`, `grocery_pos`, … in many uploads). | Categorical branch in sklearn; inference defaults to **`unk`** in the API (§8). |
+| `state` | US-style state for the card side. | Same as `category` for train vs serve split. |
+
+**Columns often present in the same Kaggle CSV but unused here:** community EDA posts and mirrors of this schema frequently list extra string fields (examples: **`merchant`**, **`first` / `last`**, **`street`**, **`city`**, **`job`**, **`dob`**, **`trans_num`**) that describe **PII-like cardholder and merchant narrative**. ModelServe **does not** read them in `training/train.py`; they stay in the file for exploration or future features. If I ever promote one of them into the model, I must add it to **`feature_schema.py`**, Feast definitions, materialization, and the API frame builder together.
+
+**Practical note:** Kaggle’s inline “column descriptions” UI can differ between dataset revisions. If a column disappears after a refresh, **`train.py`’s explicit checks** (`if c not in df.columns`) fail fast — I fix the path or align `feature_schema.py` with the new schema.
 
 ### 4.2 Entity and `entity_id`
 
@@ -267,22 +290,9 @@ flowchart TB
 
 Fraud is typically **<1–5%** of rows. Without class weights, a model can maximize accuracy by predicting “legitimate” always. **`class_weight="balanced"`** forces the forest to pay attention to the minority class in proportion to imbalance.
 
-### 5.6 `train.py` phases mapped to source lines
+### 5.6 `train.py` — code anchors, references, and end-to-end flow narrative
 
-| Phase | What happens | Approx. lines (`training/train.py`) |
-|-------|----------------|--------------------------------------|
-| Env + paths | `load_dotenv`, `ROOT`, constants | 40–65 |
-| Load CSV | `load_raw`, optional `TRAIN_MAX_ROWS` | 67–83, 92–93 |
-| Column validation | Entity, target, raw timestamp | 94–97 |
-| Feature engineering | `event_timestamp`, `gender_code`, numeric `zip`, coerce numerics | 99–119 |
-| Label filter | Keep rows where `is_fraud` ∈ {0,1} | 121–123 |
-| Column lists | `num_cols`, `cat_cols`, fillna | 125–145 |
-| Feast export slice | `export` DataFrame, `cc_num` as int64 | 146–154 |
-| Split | Stratified 80/20 | 160–163 |
-| Pipeline | `ColumnTransformer` + `RandomForestClassifier` | 165–197 |
-| MLflow run | `start_run`, `fit`, metrics, `log_model` with `registered_model_name` | 199–226 |
-| Registry promotion | `transition_model_version_stage` → Production | 228–243 |
-| Artifacts | `model.pkl`, Parquet, `sample_request.json` | 245–256 |
+The diagram below is the **same story** as the snippets: **environment → validated CSV → engineered columns → Feast export slice → sklearn fit → MLflow → disk artifacts**. Read the bullets **in order**, then map each bullet to the cited code.
 
 ```mermaid
 sequenceDiagram
@@ -299,6 +309,243 @@ sequenceDiagram
   T->>M: transition Production
   T->>F: write features.parquet
 ```
+
+**How to read the diagram (left → right in time):** **`U ->> T`** is simply “I run `python training/train.py` on a host that can reach MLflow.” **`T ->> M` / `M ->> P`** repeat: every `mlflow.start_run`, metric log, and `log_model` persists metadata in the tracking server, which this stack backs with **Postgres** — that is why the diagram shows the database in the loop even though **training** does not query SQL directly. **`T ->> F`** is the **last** hop: after the registry promotion step, the script writes **`training/features.parquet`** to disk; that file is what **`feast apply`** registers and what **`materialize_features.py`** later scans for timestamps (§7.4). Nothing in this diagram is asynchronous — if MLflow is down, training exits before Parquet exists.
+
+**Step A — Resolve paths and MLflow experiment (before any data work).**  
+`ROOT` anchors all file paths to the repository root so the script behaves the same from CI, laptop, or EC2. `load_dotenv` pulls `MLFLOW_TRACKING_URI` and related env vars; `MLFLOW_EXPERIMENT_NAME` groups runs in the UI.
+
+```40:64:training/train.py
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from training.feature_schema import (  # noqa: E402
+    ENTITY_ID_COL,
+    EVENT_TIMESTAMP_COL,
+    FEAST_NUMERIC_FEATURE_COLS,
+    RAW_TIMESTAMP_COL,
+    TARGET_COL,
+)
+
+# Optional: .env in repo root
+load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env.example", override=False)
+
+RANDOM_STATE = 42
+MLFLOW_EXPERIMENT_NAME = os.environ.get("MLFLOW_EXPERIMENT_NAME", "modelserve_fraud")
+# Host uses localhost; override if needed (e.g. http://mlflow:5000 is for containers)
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
+MLFLOW_MODEL_NAME = os.environ.get("MLFLOW_MODEL_NAME", "modelserve_classifier")
+FRAUD_TRAIN_PATH = os.environ.get("FRAUD_TRAIN_PATH", str(ROOT / "data" / "raw" / "fraudTrain.csv"))
+MODEL_PKL = ROOT / "training" / "model.pkl"
+PARQUET_OUT = ROOT / "training" / "features.parquet"
+SAMPLE_REQUEST = ROOT / "training" / "sample_request.json"
+```
+
+**How it connects:** `feature_schema` symbols imported here are the **single contract** later reused by `feast_repo/feature_definitions.py` and `app/feature_client.py` — drift in names breaks Feast or `/predict`.
+
+**Step B — Load and gate the CSV.**  
+`load_raw` exits with a clear message if the Kaggle file is missing; optional `TRAIN_MAX_ROWS` caps rows for fast CI runs (`deploy_ec2_pipeline.sh` sets `50000`).
+
+```67:83:training/train.py
+def _nrows() -> int | None:
+    raw = os.environ.get("TRAIN_MAX_ROWS", "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
+def load_raw(path: Path) -> pd.DataFrame:
+    if not path.is_file():
+        print(
+            f"ERROR: training data not found: {path}\n"
+            "Download: https://www.kaggle.com/datasets/kartik2112/fraud-detection\n"
+            "Save fraudTrain.csv as data/raw/fraudTrain.csv or set FRAUD_TRAIN_PATH.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    nrows = _nrows()
+    return pd.read_csv(path, nrows=nrows)
+```
+
+**Step C — Validate required raw columns, then engineer features for modeling + Feast export.**  
+`event_timestamp` is required for Feast materialization windows. `gender_code` and numeric `zip` align the **Feast numeric schema** with the **full pipeline** inputs (categorical `gender` remains for one-hot).
+
+```94:154:training/train.py
+    for c in (ENTITY_ID_COL, TARGET_COL, RAW_TIMESTAMP_COL):
+        if c not in df.columns:
+            print(f"ERROR: missing column {c!r} in {raw_path.name}", file=sys.stderr)
+            sys.exit(1)
+
+    df[EVENT_TIMESTAMP_COL] = pd.to_datetime(df[RAW_TIMESTAMP_COL], utc=True, errors="coerce")
+    if df[EVENT_TIMESTAMP_COL].isna().all():
+        raise SystemExit("Could not parse " + RAW_TIMESTAMP_COL)
+
+    g = df.get("gender", pd.Series("U", index=df.index))
+    df["gender_code"] = g.map({"M": 1.0, "F": 0.0}).fillna(0.0)
+    df["zip"] = pd.to_numeric(df.get("zip", 0), errors="coerce").fillna(0.0)
+
+    for c in [
+        "amt",
+        "lat",
+        "long",
+        "city_pop",
+        "merch_lat",
+        "merch_long",
+        "unix_time",
+    ]:
+        if c not in df.columns:
+            print(f"ERROR: missing column {c!r}", file=sys.stderr)
+            sys.exit(1)
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    y = df[TARGET_COL].astype(int)
+    good = (y == 0) | (y == 1)
+    df, y = df.loc[good].reset_index(drop=True), y[good].to_numpy()
+
+    num_cols = [
+        c
+        for c in [
+            "amt",
+            "lat",
+            "long",
+            "city_pop",
+            "merch_lat",
+            "merch_long",
+            "unix_time",
+            "zip",
+            "gender_code",
+        ]
+        if c in df.columns
+    ]
+    cat_cols = [c for c in ("category", "state", "gender") if c in df.columns]
+    for c in num_cols:
+        df[c] = df[c].fillna(0.0)
+    for c in cat_cols:
+        df[c] = df[c].fillna("unk").astype(str)
+
+    for c in FEAST_NUMERIC_FEATURE_COLS:
+        if c not in df.columns:
+            print(f"ERROR: need column {c!r} for Feast export", file=sys.stderr)
+            sys.exit(1)
+
+    export = df[[ENTITY_ID_COL, EVENT_TIMESTAMP_COL, *FEAST_NUMERIC_FEATURE_COLS]].copy()
+    for c in FEAST_NUMERIC_FEATURE_COLS:
+        export[c] = export[c].fillna(0.0)
+    export[ENTITY_ID_COL] = export[ENTITY_ID_COL].astype("int64")
+```
+
+**Reference chain:** `export` → **`training/features.parquet`** → `FileSource` in Feast → **`materialize_features.py`** → Redis keys for each `cc_num` in the export window.
+
+**Step D — Build the sklearn `Pipeline`, fit inside an MLflow run, log metrics, register.**  
+`ColumnTransformer` keeps numeric and categorical preprocessing isolated; `RandomForestClassifier` is the classifier with imbalance-aware weights.
+
+```160:226:training/train.py
+    X = df[num_cols + cat_cols]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE
+    )
+
+    pre = ColumnTransformer(
+        [
+            (
+                "num",
+                Pipeline(
+                    [("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]
+                ),
+                num_cols,
+            ),
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False, max_categories=20),
+                cat_cols,
+            ),
+        ],
+        remainder="drop",
+    )
+    pipeline = Pipeline(
+        [
+            ("prep", pre),
+            (
+                "clf",
+                RandomForestClassifier(
+                    n_estimators=100,
+                    max_depth=20,
+                    min_samples_leaf=2,
+                    class_weight="balanced",
+                    n_jobs=-1,
+                    random_state=RANDOM_STATE,
+                ),
+            ),
+        ]
+    )
+
+    with mlflow.start_run(
+        run_name=f"train_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    ) as run:
+        run_id = run.info.run_id
+        pipeline.fit(X_train, y_train)
+        pred = pipeline.predict(X_test)
+        proba = pipeline.predict_proba(X_test)[:, 1] if len(np.unique(y)) > 1 else pred
+
+        m = {
+            "accuracy": float(accuracy_score(y_test, pred)),
+            "precision": float(precision_score(y_test, pred, zero_division=0)),
+            "recall": float(recall_score(y_test, pred, zero_division=0)),
+            "f1": float(f1_score(y_test, pred, zero_division=0)),
+        }
+        if len(np.unique(y_test)) > 1 and len(np.unique(pred)) > 1:
+            m["roc_auc"] = float(roc_auc_score(y_test, proba))
+        for k, v in m.items():
+            mlflow.log_metric(k, v)
+        mlflow.log_param("model", "RandomForestClassifier")
+        mlflow.log_param("train_rows", int(len(X_train)))
+        mlflow.log_param("n_features_raw", int(X_train.shape[1]))
+        mlflow.log_param("data_path", str(raw_path))
+
+        mlflow.sklearn.log_model(
+            pipeline,
+            artifact_path="model",
+            registered_model_name=MLFLOW_MODEL_NAME,
+        )
+```
+
+**Step E — Promote latest registry version to Production and write local artifacts.**  
+Promotion is explicit so the API’s `models:/…/Production` URI always resolves after a successful train. Parquet + `sample_request.json` close the loop for Feast and demos.
+
+```228:256:training/train.py
+    client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+    versions = client.search_model_versions(f"name='{MLFLOW_MODEL_NAME}'")
+    if not versions:
+        print("No model versions in registry; training run may have failed to register.", file=sys.stderr)
+        sys.exit(1)
+    latest = max(versions, key=lambda v: int(v.version))
+    model_version = int(latest.version)
+    client.transition_model_version_stage(
+        MLFLOW_MODEL_NAME,
+        str(model_version),
+        stage="Production",
+        archive_existing_versions=True,
+    )
+    print(
+        f"OK: {MLFLOW_MODEL_NAME} v{model_version} -> Production (run {run_id})"
+    )
+
+    with open(MODEL_PKL, "wb") as f:
+        pickle.dump(pipeline, f)
+    print(f"Wrote {MODEL_PKL}")
+
+    export.to_parquet(PARQUET_OUT, index=False, engine="pyarrow")
+    print(f"Wrote {PARQUET_OUT} shape={export.shape}")
+
+    rng = np.random.default_rng(RANDOM_STATE)
+    pick = int(rng.choice(export[ENTITY_ID_COL].dropna().unique(), size=1)[0])
+    with open(SAMPLE_REQUEST, "w", encoding="utf-8") as f:
+        json.dump({"entity_id": pick}, f, indent=2)
+    print(f"Wrote {SAMPLE_REQUEST} entity_id={pick}")
+```
+
+**Flow recap (ties the diagram to code):** the **vertical axis** of the sequence diagram is “call MLflow tracking API + Postgres backing store”; the **horizontal artifact** is **`features.parquet`**, which is **not** uploaded through MLflow — it is a **separate file** consumed by Feast in §7.
 
 ---
 
@@ -330,15 +577,28 @@ The MLflow container uses a **custom image** (`docker/mlflow/Dockerfile`) for **
 
 ### 6.5 How the API loads Production
 
-```12:41:app/model_loader.py
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
-MLFLOW_MODEL_NAME = os.environ.get("MLFLOW_MODEL_NAME", "modelserve_classifier")
-MLFLOW_MODEL_STAGE = os.environ.get("MLFLOW_MODEL_STAGE", "Production")
-// ...
+```24:44:app/model_loader.py
+def load_from_registry() -> None:
+    """Load Production model from MLflow; safe to call once at startup."""
+    global _model, _version, _load_error
+    _model = None
+    _version = None
+    _load_error = None
+    try:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         uri = f"models:/{MLFLOW_MODEL_NAME}/{MLFLOW_MODEL_STAGE}"
         _model = mlflow.sklearn.load_model(uri)
         client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
         versions = client.get_latest_versions(MLFLOW_MODEL_NAME, stages=[MLFLOW_MODEL_STAGE])
+        if not versions:
+            raise RuntimeError(
+                f"No {MLFLOW_MODEL_STAGE} version for {MLFLOW_MODEL_NAME!r} in registry."
+            )
+        _version = str(versions[0].version)
+        logger.info("Loaded MLflow model %s stage=%s version=%s", MLFLOW_MODEL_NAME, MLFLOW_MODEL_STAGE, _version)
+    except Exception as exc:  # noqa: BLE001 — surface any load failure without crashing process
+        _load_error = str(exc)
+        logger.exception("Failed to load MLflow model: %s", exc)
 ```
 
 **Startup only:** the model is loaded once in FastAPI **lifespan** — changing Production in MLflow requires **API restart** to pick up a new artifact.
@@ -367,9 +627,134 @@ MLFLOW_MODEL_STAGE = os.environ.get("MLFLOW_MODEL_STAGE", "Production")
 
 ### 7.4 Materialization and `get_online_features`
 
-- **`feast -c feast_repo apply`** registers definitions.
-- **`materialize_features.py`** loads keys from the Parquet export into Redis.
-- **No Feast server container:** Feast is **library + CLI**; Redis is the only long-running “feature infra” process.
+**End goal:** when `POST /predict` arrives with `entity_id` (= `cc_num`), Feast can return **one row of numeric features** without scanning the whole CSV. That requires two distinct steps after training: **(1) register definitions**, **(2) copy rows from offline storage into the online store** for a **time window**.
+
+**Step 1 — `feast -c feast_repo apply` (definitions only).**  
+This reads `feast_repo/feature_definitions.py` and `feature_store.yaml`, writes/updates the **local Feast registry** (`data/registry.db`), and tells Feast that `fraud_txn_features` is backed by `training/features.parquet` (`FileSource`) and is **`online=True`**. **Apply does not bulk-load every training row into Redis by itself** in this pattern — it prepares metadata so materialization knows *what* to write and *which schema* Redis rows must satisfy.
+
+**Step 2 — `scripts/materialize_features.py` (offline → online).**  
+The script reads **only** the `event_timestamp` column from Parquet to compute **`start_date`** and **`end_date`** (min/max UTC). Those bounds define the **materialization window**: Feast copies feature values for entities in that interval from the offline source into **Redis** via `FeatureStore.materialize(start_date=…, end_date=…)`.
+
+```33:60:scripts/materialize_features.py
+def main() -> None:
+    if not PARQUET.is_file():
+        print(
+            f"ERROR: missing {PARQUET}. Run training/train.py first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    df = pd.read_parquet(PARQUET, columns=[EVENT_TIMESTAMP_COL])
+    ts = pd.to_datetime(df[EVENT_TIMESTAMP_COL], utc=True, errors="coerce")
+    if ts.isna().all():
+        print("ERROR: no valid event timestamps in features parquet.", file=sys.stderr)
+        sys.exit(1)
+    start = ts.min().to_pydatetime()
+    end = ts.max().to_pydatetime()
+    if start >= end:
+        print("ERROR: need start < end for materialize.", file=sys.stderr)
+        sys.exit(1)
+
+    store = FeatureStore(repo_path=str(FEAST_REPO))
+    print(
+        f"Materializing {start.isoformat()} .. {end.isoformat()} (UTC) into online store",
+        file=sys.stderr,
+    )
+    store.materialize(
+        start_date=start,
+        end_date=end,
+    )
+```
+
+**Why the window matters:** if I add **new** rows to Parquet with timestamps **outside** the last materialized range, **online lookups can miss** until I re-run materialize with an interval that covers the new data.
+
+**Step 3 — `get_online_features` at request time (API).**  
+At startup, `FeastFeatureClient` loads `FeatureStore` from `FEAST_REPO_PATH` (default `feast_repo`). Inside Docker, **`_resolve_repo_path`** may copy the repo to a temp directory and **patch `feature_store.yaml`’s Redis `connection_string`** from `REDIS_URL` so the SDK hits the **`redis`** service instead of `127.0.0.1` — without that indirection, `get_online_features` would point at the wrong host from the API container.
+
+```56:99:app/feature_client.py
+def _resolve_repo_path(base: str) -> str:
+    """
+    Feast YAML in-repo uses 127.0.0.1 for host-side materialize.
+    In Docker, REDIS_URL points at the redis service — copy feast_repo to a temp
+    dir and patch connection_string without modifying the git tree.
+    """
+    base_path = Path(base).resolve()
+    yaml_path = base_path / "feature_store.yaml"
+    if not yaml_path.is_file():
+        return str(base_path)
+
+    conn = _redis_connection_string_from_env()
+    if not conn:
+        return str(base_path)
+
+    text = yaml_path.read_text(encoding="utf-8")
+    if conn in text:
+        return str(base_path)
+
+    new_text, n = re.subn(
+        r"(?m)^(\s*connection_string:\s*)[\"'][^\"']+[\"']",
+        rf'\1"{conn}"',
+        text,
+        count=1,
+    )
+    if n != 1:
+        logger.warning("Could not patch Feast connection_string; using repo as-is.")
+        return str(base_path)
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="feast_repo_"))
+    patched = tmp_root / "feast_repo"
+    shutil.copytree(base_path, patched)
+    (patched / "feature_store.yaml").write_text(new_text, encoding="utf-8")
+    return str(patched)
+
+
+class FeastFeatureClient:
+    """Thin wrapper around FeatureStore.get_online_features."""
+
+    def __init__(self, repo_path: str | None = None) -> None:
+        raw = repo_path or os.environ.get("FEAST_REPO_PATH", "feast_repo")
+        resolved = _resolve_repo_path(raw)
+        self._repo_path = resolved
+        self._store = FeatureStore(repo_path=resolved)
+```
+
+`get_features` then builds `entity_rows=[{cc_num: entity_id}]`, calls `FeatureStore.get_online_features` with refs like `fraud_txn_features:amt`, and normalizes prefixed column names into a flat `dict[str, float]`. Hits increment `feast_online_store_hits_total`; empty or partial rows increment **miss** metrics and raise **`ValueError`** → HTTP **404** `missing_features` in `main.py`.
+
+```101:131:app/feature_client.py
+    def get_features(self, entity_id: int) -> dict[str, float]:
+        """
+        Return a flat dict of feature column -> float for one cc_num.
+        Raises ValueError if online store has no usable row.
+        """
+        entity_rows = [{ENTITY_KEY: int(entity_id)}]
+        resp = self._store.get_online_features(
+            features=_feast_feature_refs(),
+            entity_rows=entity_rows,
+        )
+        df = resp.to_df()
+        if df.empty:
+            metrics.feast_online_store_misses_total.labels(reason="empty").inc()
+            raise ValueError("No feature row returned for entity_id")
+
+        row = df.iloc[0]
+        # Feast may prefix columns; normalize to bare feature names
+        out: dict[str, float] = {}
+        for name in FEAST_NUMERIC_FEATURE_COLS:
+            val = None
+            for key in (name, f"{FEATURE_VIEW}__{name}", f"{FEATURE_VIEW}:{name}"):
+                if key in row.index and pd.notna(row[key]):
+                    val = row[key]
+                    break
+            if val is None:
+                metrics.feast_online_store_misses_total.labels(reason="missing_field").inc()
+                raise ValueError(f"Missing Feast field for {name!r}")
+            out[name] = float(val)
+
+        metrics.feast_online_store_hits_total.inc()
+        return out
+```
+
+**No Feast server container:** Feast is **library + CLI**; **Redis** is the only separate process holding online feature rows.
 
 ```mermaid
 sequenceDiagram
@@ -386,6 +771,8 @@ sequenceDiagram
   M->>R: online write
   A->>R: Feast SDK get_online_features
 ```
+
+**Reading the swimlanes:** **`T ->> P`** is the Parquet write at the end of `train.py` (offline store for Feast). **`F ->> P`** is not a data copy — it means “`feast apply` registered metadata that **points** `FileSource` at this path.” **`M ->> P` / `M ->> R`** is the only step that **hydrates** Redis: materialize reads timestamps from Parquet to pick a window, then Feast copies the matching entity rows into the **online** store. **`A ->> R`** is shorthand for the runtime path: FastAPI never talks to Redis with a raw client; it calls the Feast SDK, which uses the patched YAML and **reads** the same Redis keys materialization wrote. If **`A ->> R` returns nothing**, the failure surfaces as **`get_features` → `ValueError`** (§8.2), not as a Redis timeout in application code.
 
 ---
 
@@ -414,6 +801,8 @@ async def lifespan(app: FastAPI):
 
 ### 8.2 Prediction path
 
+The diagram is the **happy path** only; the numbered bullets below match **each edge** and tie to **`predict()`** in `app/main.py`.
+
 ```mermaid
 flowchart LR
   RQ[POST /predict] --> V[validate model + Feast client]
@@ -423,6 +812,67 @@ flowchart LR
   P --> M[prediction_duration histogram]
   M --> J[JSON response]
 ```
+
+**Diagram ↔ code:** `RQ` is the **`@app.post("/predict")`** handler; **`V`** bundles lines **104–117** (model + Feast client checks); **`G`** is the `try`/`except ValueError` around **`get_features`**; **`B`** is **`_build_model_frame`**; **`P`** is **`model_loader.predict`** (sklearn `predict` + `predict_proba`); **`M`** is the **success-path** `prediction_duration_seconds.observe`; **`J`** is the final **200** JSON dict. Branches omitted from the picture: **`RuntimeError` → 500 `inference_error`**, generic **`Exception` → 500 `internal_error`**, both still observe latency on the error return paths.
+
+1. **Ingress + counter** — every call hits `prediction_requests_total.inc()` first so Prometheus sees attempted load even when later steps fail.
+
+```101:103:app/main.py
+@app.post("/predict")
+def predict(req: PredictRequest) -> dict[str, Any]:
+    metrics.prediction_requests_total.inc()
+```
+
+2. **Guardrails** — if the MLflow pipeline never loaded (`model_unavailable`) or Feast init failed (`feast_unavailable`), return **503** with structured JSON **before** timing work that would skew latency.
+
+3. **Feast lookup** — `get_features(req.entity_id)` returns only **numeric** columns aligned with `FEAST_NUMERIC_FEATURE_COLS`. If the entity was never materialized, Feast returns empty → **`ValueError`** → **404** `missing_features` and `prediction_errors_total{reason="missing_features"}`.
+
+```119:125:app/main.py
+    t0 = time.perf_counter()
+    try:
+        feats = _feast_client.get_features(req.entity_id)
+    except ValueError as exc:
+        metrics.prediction_errors_total.labels(reason="missing_features").inc()
+        metrics.prediction_duration_seconds.observe(time.perf_counter() - t0)
+        return _error_body("missing_features", str(exc), 404)
+```
+
+4. **Frame assembly for sklearn** — `_build_model_frame` merges Feast numerics with **fixed categorical defaults** (`unk`) in the order the `Pipeline` expects: all numeric Feast columns first, then `category`, `state`, `gender`.
+
+```70:75:app/main.py
+def _build_model_frame(feature_dict: dict[str, float]) -> pd.DataFrame:
+    row: dict[str, Any] = dict(feature_dict)
+    row.update(_CAT_DEFAULTS)
+    num_cols = list(FEAST_NUMERIC_FEATURE_COLS)
+    ordered = num_cols + list(_CAT_ORDER)
+    return pd.DataFrame([{c: row[c] for c in ordered}], columns=ordered)
+```
+
+5. **Inference + probability** — `model_loader.predict` runs `predict` and `predict_proba` on the **same** fitted `Pipeline` logged to MLflow; fraud probability is **class 1** probability.
+
+```127:131:app/main.py
+    try:
+        X = _build_model_frame(feats)
+        y_pred, proba = model_loader.predict(X)
+        fraud_probability = float(proba[0][1])
+        prediction = int(y_pred[0])
+```
+
+6. **Latency observation + JSON** — on success, record wall time in `prediction_duration_seconds` and return model name/version for traceability.
+
+```142:150:app/main.py
+    metrics.prediction_duration_seconds.observe(time.perf_counter() - t0)
+    return {
+        "entity_id": int(req.entity_id),
+        "prediction": prediction,
+        "fraud_probability": fraud_probability,
+        "model_name": MLFLOW_MODEL_NAME,
+        "model_version": model_loader.version_string(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+```
+
+**Why categoricals are “split” across Feast and FastAPI:** Feast’s online schema in this project is **numeric-only** (simpler Redis rows and alignment with Parquet export). The sklearn model still expects **one-hot categoricals** from training, so the API **injects** stable defaults — the critical discipline is keeping those defaults consistent with training `fillna("unk")` and `OneHotEncoder(handle_unknown="ignore")`.
 
 ### 8.3 Error handling and HTTP semantics
 
